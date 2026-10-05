@@ -61,10 +61,15 @@ final class ModelsTests: XCTestCase {
         bad.token = "short"
         XCTAssertThrowsError(try ServersFile(servers: [bad]).validate())
 
-        // The example written on first launch must fail validation until
-        // real values are pasted in, so it never polls a placeholder.
+        // The file written on first launch is empty; servers come from the app.
         let example = try ServersFile.decode(Data(ServersFile.example.utf8))
-        XCTAssertThrowsError(try example.validate()) { err in
+        XCTAssertNoThrow(try example.validate())
+        XCTAssertTrue(example.servers.isEmpty)
+
+        // Placeholders from the old hand-edited example are still caught.
+        var placeholder = Fixtures.server
+        placeholder.token = "PASTE-TOKEN-FROM-remote-install.sh"
+        XCTAssertThrowsError(try ServersFile(servers: [placeholder]).validate()) { err in
             XCTAssertTrue("\(err)".contains("пример"), "\(err)")
         }
     }

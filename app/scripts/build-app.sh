@@ -2,6 +2,7 @@
 # Builds Monitor.app (menu bar app) from this Swift package. Run on a Mac:
 #   app/scripts/build-app.sh [version]
 # The result is app/dist/Monitor.app, signed ad hoc (no Apple Developer account).
+# Run agent/scripts/dist.sh first so the app carries the agent it installs.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -15,6 +16,20 @@ app=dist/Monitor.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin" "$app/Contents/MacOS/Monitor"
+
+# The agent bundle the app installs on servers over SSH (agent/scripts/dist.sh).
+agent_dist=../agent/dist
+if [[ -f "$agent_dist/SHA256SUMS" ]]; then
+  mkdir -p "$app/Contents/Resources/agent"
+  cp "$agent_dist"/monitor-agent-linux-amd64 "$agent_dist"/monitor-agent-linux-arm64 \
+     "$agent_dist"/monitor-agent.service "$agent_dist"/install.sh "$agent_dist"/SHA256SUMS \
+     "$app/Contents/Resources/agent/"
+elif [[ -n "${REQUIRE_AGENT:-}" ]]; then
+  echo "agent/dist is missing: run agent/scripts/dist.sh first" >&2
+  exit 1
+else
+  echo "warning: agent/dist is missing, the app will not be able to install agents" >&2
+fi
 
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
