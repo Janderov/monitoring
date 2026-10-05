@@ -19,6 +19,7 @@ struct MapScreen: View {
     @AppStorage("map.onlyProblems") private var onlyProblems = false
     @AppStorage("map.mac") private var showMac = true
     @AppStorage("map.external") private var showExternal = true
+    @AppStorage("map.clients") private var showClients = true
 
     init(model: AppModel) {
         self.model = model
@@ -62,99 +63,18 @@ struct MapScreen: View {
         let macRoutes = showMac ? mac.routes(model.statuses) : []
         let hops = showExternal ? ExternalHop.compute(model).filter { showMac || $0.fromID != MacLinksModel.pinID } : []
         let extPins = ExternalPin.group(hops, owners: external.owners, avoiding: pins.map(\.coordinate))
+        let spots = showClients ? VPNClientSpot.compute(model) : []
+        let clientPins = ClientPin.group(spots, owners: external.owners, avoiding: pins.map(\.coordinate))
         HStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
                 Map(position: $position, selection: $selectedPin) {
-                    if showLinks {
-                        ForEach(model.links) { link in
-                            if let a = locations.coordinate(for: link.from), let b = locations.coordinate(for: link.to) {
-                                MapPolyline(coordinates: [a, b], contourStyle: .geodesic)
-                                    .stroke(link.check.ok ? Color.secondary.opacity(0.6) : Color.red,
-                                            style: StrokeStyle(lineWidth: 1.5, dash: link.check.ok ? [] : [5, 4]))
-                            }
-                        }
-                        // One label per pair of servers, on the arc's middle.
-                        ForEach(LinkPair.group(model.links)) { pair in
-                            if let a = locations.coordinate(for: pair.a), let b = locations.coordinate(for: pair.b) {
-                                Annotation("", coordinate: LinkPair.greatCircleMidpoint(a, b), anchor: .center) {
-                                    Text(pair.label)
-                                        .font(.caption2.weight(.medium)).monospacedDigit()
-                                        .foregroundStyle(pair.ok ? Color.primary : Color.red)
-                                        .padding(.horizontal, 5).padding(.vertical, 1)
-                                        .background(.regularMaterial, in: Capsule())
-                                        .help(pair.detail)
-                                }
-                            }
-                        }
-                    }
-                    ForEach(routes) { r in
-                        if let a = coordinate(r.fromID), let b = coordinate(r.toID), !same(a, b) {
-                            // Straight on the map, so the arrow in the middle points along it.
-                            MapPolyline(coordinates: [a, b], contourStyle: .straight)
-                                .stroke(RouteStyle.color(r),
-                                        style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: r.kind == .relay ? [7, 5] : []))
-                            Annotation("", coordinate: RouteStyle.midpoint(a, b), anchor: .center) {
-                                Image(systemName: "arrowtriangle.right.fill")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(RouteStyle.color(r))
-                                    .rotationEffect(RouteStyle.angle(a, b))
-                                    .help(RouteStyle.describe(r, model))
-                            }
-                        }
-                    }
-                    ForEach(macRoutes) { r in
-                        // Through the Mac's VPN the hop starts at that server;
-                        // the Mac -> VPN server arrow is a route of its own.
-                        let a = r.viaID.flatMap { coordinate($0) } ?? macAt
-                        if let b = coordinate(r.toID), !same(a, b) {
-                            MapPolyline(coordinates: [a, b], contourStyle: .straight)
-                                .stroke(RouteStyle.color(r), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                            Annotation("", coordinate: RouteStyle.midpoint(a, b), anchor: .center) {
-                                Image(systemName: "arrowtriangle.right.fill")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(RouteStyle.color(r))
-                                    .rotationEffect(RouteStyle.angle(a, b))
-                                    .help(RouteStyle.describe(r, model))
-                            }
-                        }
-                    }
-                    ForEach(extPins) { pin in
-                        ForEach(pin.hops) { h in
-                            if let a = h.fromID == MacLinksModel.pinID ? Optional(macAt) : coordinate(h.fromID), !same(a, pin.coordinate) {
-                                MapPolyline(coordinates: [a, pin.coordinate], contourStyle: .straight)
-                                    .stroke(Color.gray.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
-                            }
-                        }
-                        Annotation(pin.country.name, coordinate: pin.coordinate, anchor: .center) {
-                            Image(systemName: "questionmark")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 20, height: 20)
-                                .background(Color.gray, in: Circle())
-                                .overlay(Circle().strokeBorder(.white, lineWidth: 2))
-                                .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
-                                .help(pin.hops.map(\.ip).joined(separator: ", "))
-                        }
-                        .tag(pin.id)
-                    }
-                    if showMac {
-                        Annotation("Этот Mac", coordinate: macAt, anchor: .center) {
-                            Image(systemName: "laptopcomputer")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 26, height: 26)
-                                .background(RouteStyle.macTint, in: Circle())
-                                .overlay(Circle().strokeBorder(.white, lineWidth: 2))
-                                .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
-                        }
-                        .tag(MacLinksModel.pinID)
-                    }
-                    ForEach(pins) { pin in
-                        Annotation(pin.title, coordinate: pin.coordinate, anchor: .center) {
-                            PinView(level: pin.level, count: pin.statuses.count)
-                        }
-                        .tag(pin.id)
-                    }
+                    linkLayer()
+                    routeLayer(routes)
+                    macRouteLayer(macRoutes, from: macAt)
+                    clientLayer(clientPins)
+                    externalLayer(extPins, mac: macAt)
+                    macPin(macAt)
+                    serverPins(pins)
                 }
                 .mapStyle(.standard(emphasis: .muted, pointsOfInterest: .excludingAll))
                 .mapControls {
@@ -167,23 +87,7 @@ struct MapScreen: View {
                 layers
                     .padding(12)
             }
-            if let id = selectedPin, let pin = extPins.first(where: { $0.id == id }) {
-                Divider()
-                ExternalInspector(model: model, pin: pin, owners: external.owners)
-                    .frame(width: 300)
-            } else if selectedPin == MacLinksModel.pinID, showMac {
-                Divider()
-                MacInspector(model: model, mac: mac, center: center)
-                    .frame(width: 300)
-            } else if let id = selectedPin, let pin = pins.first(where: { $0.id == id }) {
-                Divider()
-                MapInspector(model: model, statuses: pin.statuses, center: center)
-                    .frame(width: 300)
-            } else if !unplaced.isEmpty {
-                Divider()
-                UnplacedList(model: model, statuses: unplaced, center: center)
-                    .frame(width: 260)
-            }
+            inspector(pins: pins, clientPins: clientPins, extPins: extPins)
         }
         .navigationTitle("Карта")
         .navigationSubtitle("\(model.visible.count) серверов" + (routes.isEmpty ? "" : " · маршрутов VPN: \(routes.count)"))
@@ -205,14 +109,171 @@ struct MapScreen: View {
         .task(id: showMac) {
             if showMac { await mac.run() }
         }
-        .task(id: hops.map(\.ip)) {
-            await external.resolve(hops.map(\.ip))
+        .task(id: hops.map(\.ip) + spots.map(\.ip)) {
+            await external.resolve(hops.map(\.ip) + Array(Set(spots.map(\.ip))).sorted())
         }
         .onAppear {
             // Opening the map from a server's menu selects its pin.
             if let id = model.selectedServerID, let pin = pins.first(where: { $0.statuses.contains { $0.id == id } }) {
                 selectedPin = pin.id
             }
+        }
+    }
+
+    @ViewBuilder
+    private func inspector(pins: [Pin], clientPins: [ClientPin], extPins: [ExternalPin]) -> some View {
+        if let id = selectedPin, let pin = clientPins.first(where: { $0.id == id }) {
+            Divider()
+            ClientsInspector(model: model, pin: pin, owners: external.owners)
+                .frame(width: 300)
+        } else if let id = selectedPin, let pin = extPins.first(where: { $0.id == id }) {
+            Divider()
+            ExternalInspector(model: model, pin: pin, owners: external.owners)
+                .frame(width: 300)
+        } else if selectedPin == MacLinksModel.pinID, showMac {
+            Divider()
+            MacInspector(model: model, mac: mac, center: center)
+                .frame(width: 300)
+        } else if let id = selectedPin, let pin = pins.first(where: { $0.id == id }) {
+            Divider()
+            MapInspector(model: model, statuses: pin.statuses, center: center)
+                .frame(width: 300)
+        } else if !unplaced.isEmpty {
+            Divider()
+            UnplacedList(model: model, statuses: unplaced, center: center)
+                .frame(width: 260)
+        }
+    }
+
+    @MapContentBuilder
+    private func linkLayer() -> some MapContent {
+        if showLinks {
+            ForEach(model.links) { link in
+                if let a = locations.coordinate(for: link.from), let b = locations.coordinate(for: link.to) {
+                    MapPolyline(coordinates: [a, b], contourStyle: .geodesic)
+                        .stroke(link.check.ok ? Color.secondary.opacity(0.6) : Color.red,
+                                style: StrokeStyle(lineWidth: 1.5, dash: link.check.ok ? [] : [5, 4]))
+                }
+            }
+            // One label per pair of servers, on the arc's middle.
+            ForEach(LinkPair.group(model.links)) { pair in
+                if let a = locations.coordinate(for: pair.a), let b = locations.coordinate(for: pair.b) {
+                    Annotation("", coordinate: LinkPair.greatCircleMidpoint(a, b), anchor: .center) {
+                        Text(pair.label)
+                            .font(.caption2.weight(.medium)).monospacedDigit()
+                            .foregroundStyle(pair.ok ? Color.primary : Color.red)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(.regularMaterial, in: Capsule())
+                            .help(pair.detail)
+                    }
+                }
+            }
+        }
+    }
+
+    @MapContentBuilder
+    private func routeLayer(_ routes: [VPNRoute]) -> some MapContent {
+        ForEach(routes) { r in
+            if let a = coordinate(r.fromID), let b = coordinate(r.toID), !same(a, b) {
+                // Straight on the map, so the arrow in the middle points along it.
+                MapPolyline(coordinates: [a, b], contourStyle: .straight)
+                    .stroke(RouteStyle.color(r),
+                            style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: r.kind == .relay ? [7, 5] : []))
+                Annotation("", coordinate: RouteStyle.midpoint(a, b), anchor: .center) {
+                    Image(systemName: "arrowtriangle.right.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(RouteStyle.color(r))
+                        .rotationEffect(RouteStyle.angle(a, b))
+                        .help(RouteStyle.describe(r, model))
+                }
+            }
+        }
+    }
+
+    @MapContentBuilder
+    private func macRouteLayer(_ macRoutes: [MacRoute], from macAt: CLLocationCoordinate2D) -> some MapContent {
+        ForEach(macRoutes) { r in
+            // Through the Mac's VPN the hop starts at that server;
+            // the Mac -> VPN server arrow is a route of its own.
+            let a = r.viaID.flatMap { coordinate($0) } ?? macAt
+            if let b = coordinate(r.toID), !same(a, b) {
+                MapPolyline(coordinates: [a, b], contourStyle: .straight)
+                    .stroke(RouteStyle.color(r), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                Annotation("", coordinate: RouteStyle.midpoint(a, b), anchor: .center) {
+                    Image(systemName: "arrowtriangle.right.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(RouteStyle.color(r))
+                        .rotationEffect(RouteStyle.angle(a, b))
+                        .help(RouteStyle.describe(r, model))
+                }
+            }
+        }
+    }
+
+    @MapContentBuilder
+    private func clientLayer(_ clientPins: [ClientPin]) -> some MapContent {
+        ForEach(clientPins) { pin in
+            ForEach(pin.serverIDs, id: \.self) { sid in
+                if let b = coordinate(sid), !same(pin.coordinate, b) {
+                    MapPolyline(coordinates: [pin.coordinate, b], contourStyle: .geodesic)
+                        .stroke(pin.active(to: sid) ? RouteStyle.clientTint.opacity(0.8) : Color.gray.opacity(0.4),
+                                style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                }
+            }
+            Annotation("", coordinate: pin.coordinate, anchor: .center) {
+                ClientPinView(pin: pin)
+            }
+            .tag(pin.id)
+        }
+    }
+
+    @MapContentBuilder
+    private func externalLayer(_ extPins: [ExternalPin], mac macAt: CLLocationCoordinate2D) -> some MapContent {
+        ForEach(extPins) { pin in
+            ForEach(pin.sources, id: \.self) { from in
+                if let a = from == MacLinksModel.pinID ? Optional(macAt) : coordinate(from), !same(a, pin.coordinate) {
+                    MapPolyline(coordinates: [a, pin.coordinate], contourStyle: .straight)
+                        .stroke(Color.gray.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                }
+            }
+            Annotation(pin.title, coordinate: pin.coordinate, anchor: .center) {
+                Image(systemName: pin.service == nil ? "questionmark" : "globe")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 20, height: 20)
+                    .background(Color.gray, in: Circle())
+                    .overlay(Circle().strokeBorder(.white, lineWidth: 2))
+                    .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
+                    .help(pin.service.map { "\($0): конечная точка, адресов \(pin.hops.count)" }
+                          ?? pin.hops.map(\.ip).joined(separator: ", "))
+            }
+            .tag(pin.id)
+        }
+    }
+
+    @MapContentBuilder
+    private func macPin(_ macAt: CLLocationCoordinate2D) -> some MapContent {
+        if showMac {
+            Annotation("Этот Mac", coordinate: macAt, anchor: .center) {
+                Image(systemName: "laptopcomputer")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 26)
+                    .background(RouteStyle.macTint, in: Circle())
+                    .overlay(Circle().strokeBorder(.white, lineWidth: 2))
+                    .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
+            }
+            .tag(MacLinksModel.pinID)
+        }
+    }
+
+    @MapContentBuilder
+    private func serverPins(_ pins: [Pin]) -> some MapContent {
+        ForEach(pins) { pin in
+            Annotation(pin.title, coordinate: pin.coordinate, anchor: .center) {
+                PinView(level: pin.level, count: pin.statuses.count)
+            }
+            .tag(pin.id)
         }
     }
 
@@ -233,6 +294,7 @@ struct MapScreen: View {
                 }
                 .font(.caption)
             }
+            Toggle("Клиенты VPN", isOn: $showClients)
             Toggle("Чужие узлы", isOn: $showExternal)
             Toggle("Этот Mac", isOn: $showMac)
             if showMac {
@@ -342,6 +404,7 @@ struct LinkPair: Identifiable {
 enum RouteStyle {
     static let tint = Color.indigo
     static let macTint = Color.teal
+    static let clientTint = Color.orange
 
     static func color(_ r: VPNRoute) -> Color { r.active ? tint : tint.opacity(0.35) }
 
