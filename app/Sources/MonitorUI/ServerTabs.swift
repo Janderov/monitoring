@@ -102,6 +102,8 @@ struct VPNTab: View {
     @ObservedObject var model: AppModel
     var server: ServerConfig
     var vpn: [Snapshot.VPN]
+    /// Outgoing connections to public addresses: where a cascade would go.
+    var links: [Snapshot.Link] = []
     @State private var newKeyFor: String?
 
     /// AmneziaWG containers can have keys added and removed from the Mac.
@@ -110,6 +112,13 @@ struct VPNTab: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            containers
+            OutgoingLinks(model: model, links: links)
+        }
+    }
+
+    @ViewBuilder private var containers: some View {
         if vpn.isEmpty {
             EmptyNote(title: "AmneziaVPN на этом сервере не найден").frame(height: 120)
         } else {
@@ -162,6 +171,51 @@ struct VPNTab: View {
 }
 
 struct ContainerRef: Identifiable { var id: String }
+
+/// Where this server connects to on the internet, and through which
+/// container. A cascade to another of our servers shows up here first.
+struct OutgoingLinks: View {
+    @ObservedObject var model: AppModel
+    var links: [Snapshot.Link]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Исходящие соединения").font(.callout.weight(.semibold))
+            if links.isEmpty {
+                Text("Сервер сейчас никуда не соединяется сам, кроме служебных проверок. Каскада через него нет, или агент старый.")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Table(links.map(LinkRow.init)) {
+                    TableColumn("Куда") { r in
+                        if let s = server(r.link.remoteIp) {
+                            Label("\(s.name) (\(r.link.remoteIp))", systemImage: "server.rack")
+                        } else {
+                            Text(r.link.remoteIp).textSelection(.enabled)
+                        }
+                    }
+                    TableColumn("Порты") { r in Text(r.link.ports.map(String.init).joined(separator: ", ")).monospacedDigit() }
+                        .width(min: 60, ideal: 90)
+                    TableColumn("Протокол") { r in Text(r.link.protos.joined(separator: ", ")) }
+                        .width(min: 60, ideal: 70)
+                    TableColumn("Через") { r in Text(r.link.via.joined(separator: ", ")).foregroundStyle(.secondary) }
+                    TableColumn("Соединений") { r in Text("\(r.link.connections)").monospacedDigit() }
+                        .width(min: 70, ideal: 80)
+                }
+                .fitRows(links.count, max: 12)
+            }
+        }
+    }
+
+    private func server(_ ip: String) -> ServerConfig? {
+        model.statuses.first { $0.server.host == ip }?.server
+    }
+}
+
+struct LinkRow: Identifiable {
+    var link: Snapshot.Link
+    var id: String { link.remoteIp }
+    init(_ l: Snapshot.Link) { link = l }
+}
 
 struct PeersTable: View {
     var peers: [Snapshot.VPN.Peer]
