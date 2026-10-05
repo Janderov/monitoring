@@ -16,10 +16,12 @@ public final class UpdateModel: ObservableObject {
     @Published public private(set) var hasToken = false
 
     private let secrets: SecretStore
+    private let backend: MonitorBackend
     static let interval: UInt64 = 6 * 3600
 
-    init(secrets: SecretStore) {
+    init(secrets: SecretStore, backend: MonitorBackend) {
         self.secrets = secrets
+        self.backend = backend
         hasToken = token != nil
         if !hasToken { state = .noToken }
         Task { [weak self] in
@@ -72,8 +74,10 @@ public final class UpdateModel: ObservableObject {
         do {
             let u = AppUpdater(token: token)
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("MonitorUpdate")
-            let file = try await u.download(update, into: dir)
-            try u.install(file)
+            try await backend.audited(.updateApp, on: .app, detail: update.version) {
+                let file = try await u.download(update, into: dir)
+                try u.install(file)
+            }
         } catch {
             state = .failed(String(describing: error))
         }

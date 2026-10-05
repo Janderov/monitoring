@@ -14,7 +14,7 @@ public struct SettingsView: View {
                 .tabItem { Label("Основные", systemImage: "gearshape") }
             UpdateSettings(updates: model.updates)
                 .tabItem { Label("Обновления", systemImage: "arrow.down.circle") }
-            AccessSettings()
+            AccessSettings(model: model)
                 .tabItem { Label("Доступ", systemImage: "person.2") }
         }
         .frame(width: 520)
@@ -124,6 +124,8 @@ private struct UpdateSettings: View {
 /// Who may do what. Today there is one user, the owner; the section shows
 /// where people and devices will appear once the hub on the Mac mini exists.
 private struct AccessSettings: View {
+    @ObservedObject var model: AppModel
+
     var body: some View {
         Form {
             Section {
@@ -152,6 +154,9 @@ private struct AccessSettings: View {
                 Text("iPhone и другие Mac подключатся к хабу, когда он появится.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Журнал действий") {
+                AuditList(model: model, objectID: nil, limit: 100)
+            }
         }
         .formStyle(.grouped)
         .frame(minHeight: 360)
@@ -159,6 +164,46 @@ private struct AccessSettings: View {
 
     private func role(_ name: String, _ detail: String) -> some View {
         LabeledContent(name) { Text(detail).foregroundStyle(.secondary).multilineTextAlignment(.trailing) }
+    }
+}
+/// Who changed what: server and site edits, agent installs, VPN keys, SSH
+/// sessions and app updates, newest first.
+struct AuditList: View {
+    @ObservedObject var model: AppModel
+    var objectID: String?
+    var limit: Int
+    @State private var records: [AuditRecord] = []
+
+    var body: some View {
+        Group {
+            if records.isEmpty {
+                Text("Пока ничего не менялось").foregroundStyle(.secondary)
+            } else {
+                ForEach(records) { r in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: icon(r.result))
+                            .foregroundStyle(r.result == .done ? Color.green : r.result == .denied ? Color.orange : Color.red)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(r.action.title): \(r.object.name)" + (r.detail.isEmpty ? "" : ", \(r.detail)"))
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text([r.actor.name, Fmt.relative(r.time), r.error].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                    }
+                }
+            }
+        }
+        .task(id: model.lastRound) {
+            records = (try? await model.backend.auditLog(limit: limit, objectID: objectID)) ?? []
+        }
+    }
+
+    private func icon(_ r: AuditRecord.Result) -> String {
+        switch r {
+        case .done: return "checkmark.circle.fill"
+        case .failed: return "xmark.circle.fill"
+        case .denied: return "hand.raised.fill"
+        }
     }
 }
 #endif

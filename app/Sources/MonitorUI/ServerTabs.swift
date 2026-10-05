@@ -128,9 +128,9 @@ struct VPNTab: View {
                         if (v.peers ?? []).isEmpty {
                             Text("Ключей пока нет").foregroundStyle(.secondary)
                         } else {
-                            PeersTable(peers: v.peers ?? [], onDelete: managed(v) ? { [server] key in
+                            PeersTable(peers: v.peers ?? [], onDelete: managed(v) ? { [server] key, name in
                                 try await model.backend.deleteVPNKey(server: server, container: v.container,
-                                                                     publicKey: key, password: nil)
+                                                                     publicKey: key, name: name, password: nil)
                             } : nil)
                         }
                     }
@@ -148,7 +148,7 @@ struct ContainerRef: Identifiable { var id: String }
 struct PeersTable: View {
     var peers: [Snapshot.VPN.Peer]
     /// Set when keys in this container can be deleted.
-    var onDelete: ((String) async throws -> Void)?
+    var onDelete: ((String, String) async throws -> Void)?
     @State private var sort = [KeyPathComparator(\PeerRow.lastSeen, order: .reverse)]
     @State private var confirm: PeerRow?
     @State private var deleting: String?
@@ -188,7 +188,7 @@ struct PeersTable: View {
         .confirmationDialog("Удалить ключ «\(confirm?.name ?? "")»?", isPresented: Binding(
             get: { confirm != nil }, set: { if !$0 { confirm = nil } })) {
             Button("Удалить", role: .destructive) {
-                if let row = confirm { remove(row.peer.publicKey) }
+                if let row = confirm { remove(row.peer.publicKey, name: row.name) }
                 confirm = nil
             }
         } message: {
@@ -202,11 +202,11 @@ struct PeersTable: View {
         }
     }
 
-    private func remove(_ publicKey: String) {
+    private func remove(_ publicKey: String, name: String) {
         guard let onDelete else { return }
         deleting = publicKey
         Task {
-            do { try await onDelete(publicKey) } catch {
+            do { try await onDelete(publicKey, name) } catch {
                 self.error = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
             }
             deleting = nil

@@ -44,7 +44,7 @@ public final class AppModel: ObservableObject {
     public init(backend: MonitorBackend) {
         self.backend = backend
         self.locations = ServerLocations()
-        self.updates = UpdateModel(secrets: KeychainSecrets())
+        self.updates = UpdateModel(secrets: KeychainSecrets(), backend: backend)
         Task { await start() }
     }
 
@@ -78,9 +78,11 @@ public final class AppModel: ObservableObject {
 
     public func pollNow() async { await backend.pollNow() }
 
-    /// Single permission check for every action. There is one user (the
-    /// owner) today, so everything is allowed; roles plug in here later.
-    public func can(_ action: UserAction, _ server: ServerConfig? = nil) -> Bool { true }
+    /// Single permission check for every button. The rules live in the
+    /// core's Access; today the only user is the owner.
+    public func can(_ action: UserAction, _ server: ServerConfig? = nil) -> Bool {
+        Access.can(.owner, action, server.map(ObjectRef.server))
+    }
 
     public func status(_ id: String) -> ServerStatus? { statuses.first { $0.id == id } }
 
@@ -89,13 +91,17 @@ public final class AppModel: ObservableObject {
     /// Opens Terminal with an SSH session (Terminal handles ssh:// links).
     public func openSSH(_ server: ServerConfig) {
         guard can(.ssh, server) else { return }
-        let user = UserDefaults.standard.string(forKey: "sshUser.\(server.id)")
+        let user = server.ssh?.user ?? UserDefaults.standard.string(forKey: "sshUser.\(server.id)")
             ?? UserDefaults.standard.string(forKey: "sshUser.default") ?? "root"
         var c = URLComponents()
         c.scheme = "ssh"
         c.user = user
         c.host = server.host
-        if let url = c.url { NSWorkspace.shared.open(url) }
+        c.port = server.ssh?.port.flatMap { $0 == 22 ? nil : $0 }
+        guard let url = c.url else { return }
+        NSWorkspace.shared.open(url)
+        let backend = backend
+        Task { _ = try? await backend.audited(.ssh, on: .server(server), detail: "\(user)@\(server.host)") {} }
     }
 
     public func copyAddress(_ server: ServerConfig) {

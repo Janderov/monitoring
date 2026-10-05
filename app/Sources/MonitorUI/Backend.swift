@@ -41,8 +41,14 @@ public protocol MonitorBackend: AnyObject, Sendable {
     // (if any) is used, otherwise the SSH key.
     func createVPNKey(server: ServerConfig, container: String, name: String,
                       password: String?) async throws -> AWGNewClient
-    func deleteVPNKey(server: ServerConfig, container: String, publicKey: String,
+    func deleteVPNKey(server: ServerConfig, container: String, publicKey: String, name: String,
                       password: String?) async throws
+
+    /// Checks the permission, runs `body` and writes the outcome to the
+    /// audit log ("Журнал действий").
+    func audited<T: Sendable>(_ action: UserAction, on object: ObjectRef, detail: String,
+                              _ body: @Sendable () async throws -> T) async throws -> T
+    func auditLog(limit: Int, objectID: String?) async throws -> [AuditRecord]
 }
 
 public struct BackendError: LocalizedError {
@@ -56,6 +62,7 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
     private let notify: @Sendable ([AlertEvent]) -> Void
     private var store: Store?
     private var poller: Poller?
+    private var auditor: Auditor?
     private let secrets: SecretStore
     private let config: ConfigRepository
 
@@ -73,6 +80,7 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
                             onUpdate: onUpdate, onEvents: notify)
         self.store = store
         self.poller = poller
+        self.auditor = Auditor(store: store)
         await poller.setSitesHandler(onSites)
         await poller.start()
     }
@@ -107,26 +115,60 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
     // MARK: Editing servers.json
 
     // ConfigRepository keeps tokens in Keychain, validates and writes
-    // atomically with a .bak copy; the poller then gets the new list.
+    // atomically with a .bak copy; the poller then gets the new list. Every
+    // change goes through the audit log.
 
     public func upsertServer(_ server: ServerConfig) async throws {
-        try await config.upsertServer(server)
+        let isNew = try await config.load().servers.contains { $0.id == server.id } == false
+        _ = try await audited(.editConfig, on: .server(server), detail: isNew ? "добавлен" : "изменён") { [config] in
+            try await config.upsertServer(server)
+        }
         try await reload()
     }
 
     public func removeServer(id: String) async throws {
-        try await config.removeServer(id: id)
+        let ref = try await serverRef(id)
+        _ = try await audited(.editConfig, on: ref, detail: "удалён") { [config] in
+            try await config.removeServer(id: id)
+        }
         try await reload()
     }
 
     public func upsertSite(_ site: SiteConfig) async throws {
-        try await config.upsertSite(site)
+        let isNew = try await config.load().sites?.contains { $0.id == site.id } != true
+        _ = try await audited(.editConfig, on: .site(site), detail: isNew ? "добавлен" : "изменён") { [config] in
+            try await config.upsertSite(site)
+        }
         try await reload()
     }
 
     public func removeSite(id: String) async throws {
-        try await config.removeSite(id: id)
+        let site = try await config.load().sites?.first { $0.id == id }
+        let ref = site.map(ObjectRef.site) ?? ObjectRef(type: .site, id: id, name: id)
+        _ = try await audited(.editConfig, on: ref, detail: "удалён") { [config] in
+            try await config.removeSite(id: id)
+        }
         try await reload()
+    }
+
+    private func serverRef(_ id: String) async throws -> ObjectRef {
+        let server = try? await config.load().servers.first { $0.id == id }
+        return server.map(ObjectRef.server) ?? ObjectRef(type: .server, id: id, name: id)
+    }
+
+    // MARK: Audit
+
+    public func audited<T: Sendable>(_ action: UserAction, on object: ObjectRef, detail: String,
+                                     _ body: @Sendable () async throws -> T) async throws -> T {
+        guard let auditor else {
+            guard Access.can(.owner, action, object) else { throw AccessDenied(action: action) }
+            return try await body()
+        }
+        return try await auditor.perform(action, on: object, detail: detail, body)
+    }
+
+    public func auditLog(limit: Int, objectID: String?) async throws -> [AuditRecord] {
+        try await auditor?.recent(limit: limit, objectID: objectID) ?? []
     }
 
     // MARK: Agent install
@@ -135,8 +177,11 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
 
     public func installAgent(_ target: SSHTarget, password: String?, agentPort: Int,
                              progress: @escaping @Sendable (InstallStep, StepState) -> Void) async throws -> InstallResult {
-        let installer = AgentInstaller(client: AgentClient(transport: PinnedTransport()))
-        return try await installer.install(target, password: password, agentPort: agentPort, progress: progress)
+        let ref = ObjectRef(type: .server, id: target.host, name: target.host)
+        return try await audited(.installAgent, on: ref, detail: "установка по SSH") {
+            let installer = AgentInstaller(client: AgentClient(transport: PinnedTransport()))
+            return try await installer.install(target, password: password, agentPort: agentPort, progress: progress)
+        }
     }
 
     public func savedPassword(serverID: String) -> String? {
@@ -150,27 +195,30 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
 
     // MARK: VPN keys
 
-    private func keys(_ server: ServerConfig, _ password: String?) -> AmneziaKeys {
+    private func amnezia(_ server: ServerConfig, _ password: String?) -> AmneziaKeys {
         AmneziaKeys(server: server, password: password ?? savedPassword(serverID: server.id))
     }
 
     public func createVPNKey(server: ServerConfig, container: String, name: String,
                              password: String?) async throws -> AWGNewClient {
-        let new = try await keys(server, password).create(container: container, name: name)
+        let keys = amnezia(server, password)
+        let ref = ObjectRef.vpnKey(publicKey: "", name: name, on: server)
+        let new = try await audited(.manageVPNKeys, on: ref, detail: "создан ключ в \(container)") {
+            try await keys.create(container: container, name: name)
+        }
         await pollNow()
         return new
     }
 
-    public func deleteVPNKey(server: ServerConfig, container: String, publicKey: String,
+    public func deleteVPNKey(server: ServerConfig, container: String, publicKey: String, name: String,
                              password: String?) async throws {
-        try await keys(server, password).delete(container: container, publicKey: publicKey)
+        let keys = amnezia(server, password)
+        let ref = ObjectRef.vpnKey(publicKey: publicKey, name: name, on: server)
+        try await audited(.manageVPNKeys, on: ref, detail: "удалён ключ из \(container)") {
+            try await keys.delete(container: container, publicKey: publicKey)
+        }
         await pollNow()
     }
 }
 
-/// Things a person can do. Every button that changes something or reaches a
-/// server asks `AppModel.can` first, so roles can be added in one place later.
-public enum UserAction: Sendable {
-    case view, ssh, manageVPNKeys, installAgent, editConfig
-}
 #endif
