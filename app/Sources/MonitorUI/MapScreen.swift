@@ -112,6 +112,7 @@ struct MapScreen: View {
         .onChange(of: spots.map(\.ip), initial: true) { _, ips in external.request(ips, first: true) }
         .onChange(of: hops.map(\.ip), initial: true) { _, ips in external.request(ips) }
         .onAppear {
+            locations.resetMovedOnce(model.visible.map(\.server))
             // Opening the map from a server's menu selects its pin.
             if let id = model.selectedServerID, let pin = pins.first(where: { $0.statuses.contains { $0.id == id } }) {
                 selectedPin = pin.id
