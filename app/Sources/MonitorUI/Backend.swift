@@ -40,7 +40,7 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
     public func reload() async throws {
         guard let poller else { return }
         let file = try ServersFile.load(from: DataFolder.serversFile)
-        await poller.setServers(file.servers)
+        await poller.setConfig(file)
         await poller.pollAll(now: Date())
     }
 
