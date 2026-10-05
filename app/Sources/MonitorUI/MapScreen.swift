@@ -131,7 +131,13 @@ struct MapScreen: View {
     private var layers: some View {
         VStack(alignment: .leading, spacing: 6) {
             Toggle("Связи и задержки", isOn: $showLinks)
+            if showLinks, model.links.isEmpty, model.statuses.count > 1 {
+                hint("Серверы пока не проверяют друг друга, поэтому линий нет.")
+            }
             Toggle("Маршруты VPN", isOn: $showRoutes)
+            if showRoutes, model.routes.isEmpty, let why = noRoutesReason {
+                hint(why)
+            }
             if showRoutes {
                 HStack(spacing: 10) {
                     routeLegend(dash: [], "туннель")
@@ -151,6 +157,24 @@ struct MapScreen: View {
         .padding(10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
         .fixedSize()
+    }
+
+    /// Why there are no routes: old agents don't report connections yet.
+    private var noRoutesReason: String? {
+        let polled = model.statuses.compactMap(\.snapshot)
+        if polled.isEmpty { return nil }
+        let old = model.statuses.filter { $0.snapshot != nil && $0.snapshot?.links == nil }.map(\.server.name)
+        if !old.isEmpty {
+            return "Нужен новый агент на: \(old.joined(separator: ", ")). Правый клик по серверу → «Переустановить агента…»."
+        }
+        return "Агенты не видят каскадов VPN между вашими серверами."
+    }
+
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: 220, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func routeLegend(dash: [CGFloat], _ t: String) -> some View {
