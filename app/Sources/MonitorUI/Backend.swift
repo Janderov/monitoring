@@ -161,7 +161,7 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
     public func audited<T: Sendable>(_ action: UserAction, on object: ObjectRef, detail: String,
                                      _ body: @Sendable () async throws -> T) async throws -> T {
         guard let auditor else {
-            guard Access.can(.owner, action, object) else { throw AccessDenied(action: action) }
+            guard Access.can(.owner, action, object) else { throw BackendError("нет прав: \(action.title.lowercased())") }
             return try await body()
         }
         return try await auditor.perform(action, on: object, detail: detail, body)

@@ -393,7 +393,7 @@ struct AddServerForm: View {
         .frame(width: 540)
         .frame(minHeight: 460)
         .onAppear(perform: prefill)
-        .onChange(of: host) { _ in if reinstall == nil { applySSHConfig() } }
+        .onChange(of: host) { if reinstall == nil { applySSHConfig() } }
     }
 
     // Page 1: where the server is and how to reach the agent.
