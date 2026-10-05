@@ -67,6 +67,13 @@ public actor Store {
         CREATE INDEX actions_ts ON actions (ts);
         CREATE INDEX actions_object ON actions (object_id, ts);
         """,
+        // Before 401/403 counted as up, a site behind a password was logged
+        // as down: fix its availability and drop those alerts from the log.
+        """
+        UPDATE site_samples SET ok = 1, error = NULL WHERE ok = 0 AND status IN (401, 403);
+        DELETE FROM events WHERE message LIKE 'сайт % недоступен%'
+          AND (message LIKE '%: 401 %' OR message LIKE '%: 403 %' OR message LIKE '%HTTP 401' OR message LIKE '%HTTP 403');
+        """,
     ]
 
     public static var schemaVersion: Int { migrations.count }

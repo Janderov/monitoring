@@ -47,6 +47,7 @@ public struct MainWindow: View {
                 }
         }
         .frame(minWidth: 1060, minHeight: 600)
+        .background(FullScreenCapable())
         .sheet(item: $model.sheet) { sheet in
             EditSheetView(model: model, sheet: sheet)
         }
@@ -188,6 +189,20 @@ public struct MonitorCommands: Commands {
     private func go(_ s: AppSection) {
         model.filter = nil
         model.section = s
+    }
+}
+
+/// A menu bar app's windows can't go full screen by default, so the green
+/// button only zoomed. This lets it open the window full screen like any app.
+private struct FullScreenCapable: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { view.window?.collectionBehavior.insert(.fullScreenPrimary) }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        view.window?.collectionBehavior.insert(.fullScreenPrimary)
     }
 }
 #endif

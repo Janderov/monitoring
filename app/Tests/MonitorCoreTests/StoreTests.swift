@@ -93,4 +93,24 @@ final class StoreTests: XCTestCase {
         try db.exec("PRAGMA user_version = \(Store.schemaVersion + 1)")
         XCTAssertThrowsError(try Store(path: path))
     }
+
+    func testOldPasswordSiteFailuresAreRepaired() async throws {
+        let path = dir.appendingPathComponent("m.sqlite").path
+        _ = try Store(path: path)
+        let db = try SQLiteDB(path: path)
+        try db.exec("""
+        INSERT INTO site_samples VALUES ('t', 'nl', 1, 0, 401, 200, '401 Unauthorized');
+        INSERT INTO site_samples VALUES ('t', 'nl', 2, 0, 502, 200, '502 Bad Gateway');
+        INSERT INTO events (server_id, ts, key, kind, severity, message)
+          VALUES ('site-t', 1, 'down', 'fired', 2, 'сайт t недоступен: 401 Unauthorized');
+        INSERT INTO events (server_id, ts, key, kind, severity, message)
+          VALUES ('site-t', 2, 'down', 'fired', 2, 'сайт t недоступен: 502 Bad Gateway');
+        PRAGMA user_version = \(Store.schemaVersion - 1);
+        """)
+        _ = try Store(path: path)
+        let ok = try db.prepare("SELECT ok FROM site_samples ORDER BY ts").rows().map { $0.int(0) }
+        XCTAssertEqual(ok, [1, 0])
+        let left = try db.prepare("SELECT message FROM events").rows().map { $0.text(0) }
+        XCTAssertEqual(left, ["сайт t недоступен: 502 Bad Gateway"])
+    }
 }
