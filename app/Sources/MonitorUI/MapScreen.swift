@@ -59,6 +59,19 @@ struct MapScreen: View {
                                             style: StrokeStyle(lineWidth: 1.5, dash: link.check.ok ? [] : [5, 4]))
                             }
                         }
+                        // One label per pair of servers, on the arc's middle.
+                        ForEach(LinkPair.group(model.links)) { pair in
+                            if let a = locations.coordinate(for: pair.a), let b = locations.coordinate(for: pair.b) {
+                                Annotation("", coordinate: LinkPair.greatCircleMidpoint(a, b), anchor: .center) {
+                                    Text(pair.label)
+                                        .font(.caption2.weight(.medium)).monospacedDigit()
+                                        .foregroundStyle(pair.ok ? Color.primary : Color.red)
+                                        .padding(.horizontal, 5).padding(.vertical, 1)
+                                        .background(.regularMaterial, in: Capsule())
+                                        .help(pair.detail)
+                                }
+                            }
+                        }
                     }
                     ForEach(routes) { r in
                         if let a = coordinate(r.fromID), let b = coordinate(r.toID), !same(a, b) {
@@ -192,6 +205,49 @@ struct MapScreen: View {
 
     private func legend(_ l: ServerStatus.Level, _ t: String) -> some View {
         HStack(spacing: 4) { StatusDot(level: l); Text(t).foregroundStyle(.secondary) }
+    }
+}
+
+/// Both directions between two servers, shown as one latency label.
+struct LinkPair: Identifiable {
+    var a: ServerConfig
+    var b: ServerConfig
+    var links: [ServerLink]
+    var id: String { a.id + "|" + b.id }
+
+    var ok: Bool { links.allSatisfy(\.check.ok) }
+
+    var label: String {
+        let ms = links.filter(\.check.ok).map(\.check.latencyMs)
+        if !ok { return ms.isEmpty ? "нет связи" : "частично" }
+        guard !ms.isEmpty else { return "—" }
+        return Fmt.ms(ms.reduce(0, +) / Double(ms.count))
+    }
+
+    var detail: String {
+        links.map { l in
+            "\(l.from.name) → \(l.to.name): " + (l.check.ok ? Fmt.ms(l.check.latencyMs) : (l.check.error ?? "нет ответа"))
+        }.joined(separator: "\n")
+    }
+
+    static func group(_ links: [ServerLink]) -> [LinkPair] {
+        var pairs: [String: LinkPair] = [:]
+        for l in links {
+            let (a, b) = l.from.id < l.to.id ? (l.from, l.to) : (l.to, l.from)
+            pairs[a.id + "|" + b.id, default: LinkPair(a: a, b: b, links: [])].links.append(l)
+        }
+        return pairs.values.sorted { $0.id < $1.id }
+    }
+
+    /// The point halfway along the great circle, where a geodesic line passes.
+    static func greatCircleMidpoint(_ p: CLLocationCoordinate2D, _ q: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
+        let r = Double.pi / 180
+        let lat1 = p.latitude * r, lon1 = p.longitude * r, lat2 = q.latitude * r
+        let dLon = (q.longitude - p.longitude) * r
+        let bx = cos(lat2) * cos(dLon), by = cos(lat2) * sin(dLon)
+        let lat = atan2(sin(lat1) + sin(lat2), sqrt((cos(lat1) + bx) * (cos(lat1) + bx) + by * by))
+        let lon = lon1 + atan2(by, cos(lat1) + bx)
+        return .init(latitude: lat / r, longitude: lon / r)
     }
 }
 
