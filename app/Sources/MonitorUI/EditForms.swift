@@ -559,6 +559,12 @@ struct AddServerForm: View {
         tags = (r.tags ?? []).joined(separator: ", ")
         agentPort = r.port
         applySSHConfig()
+        if let t = r.ssh {
+            user = t.user ?? ""
+            sshPort = t.port ?? 22
+            keyPath = t.identityFile ?? ""
+            fromConfig = nil
+        }
         if let saved = model.backend.savedPassword(serverID: r.id) {
             auth = .password
             password = saved
@@ -580,11 +586,13 @@ struct AddServerForm: View {
         }
     }
 
-    private func newServer(token: String, fingerprint: String, address: String? = nil, port: Int) -> ServerConfig {
+    private func newServer(token: String, fingerprint: String, address: String? = nil, port: Int,
+                           ssh: SSHTarget? = nil) -> ServerConfig {
         let h = address ?? trimmed(host)
         let n = optional(name) ?? h
         return ServerConfig(id: reinstall?.id ?? model.newServerID(from: n), name: n, host: h, port: port,
-                            token: token, fingerprint: fingerprint, group: optional(group), tags: tagList(tags))
+                            token: token, fingerprint: fingerprint, group: optional(group), tags: tagList(tags),
+                            thresholds: reinstall?.thresholds, ssh: ssh ?? reinstall?.ssh)
     }
 
     private func start() {
@@ -650,7 +658,7 @@ struct AddServerForm: View {
                 }
                 sink.finish()
                 let server = newServer(token: result.token, fingerprint: result.fingerprint,
-                                       address: result.host, port: result.port)
+                                       address: result.host, port: result.port, ssh: target)
                 if result.verified {
                     running = false
                     add(server, verify: false)

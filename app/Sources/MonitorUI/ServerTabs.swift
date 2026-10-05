@@ -1,4 +1,5 @@
 #if canImport(SwiftUI) && canImport(AppKit)
+import AppKit
 import MonitorCore
 import SwiftUI
 
@@ -80,7 +81,15 @@ struct ProcessesTab: View {
 }
 
 struct VPNTab: View {
+    @ObservedObject var model: AppModel
+    var server: ServerConfig
     var vpn: [Snapshot.VPN]
+    @State private var newKeyFor: String?
+
+    /// AmneziaWG containers can have keys added and removed from the Mac.
+    private func managed(_ v: Snapshot.VPN) -> Bool {
+        v.protocol.lowercased().hasPrefix("awg") && model.can(.manageVPNKeys, server)
+    }
 
     var body: some View {
         if vpn.isEmpty {
@@ -106,27 +115,53 @@ struct VPNTab: View {
                 }
                 .frame(height: tableHeight(vpn.count))
 
-                ForEach(vpn.filter { !($0.peers ?? []).isEmpty }, id: \.container) { v in
+                ForEach(vpn.filter { !($0.peers ?? []).isEmpty || managed($0) }, id: \.container) { v in
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Клиенты \(v.protocol) · \(v.container)").font(.callout.weight(.semibold))
-                        PeersTable(peers: v.peers ?? [])
+                        HStack {
+                            Text("Клиенты \(v.protocol) · \(v.container)").font(.callout.weight(.semibold))
+                            Spacer()
+                            if managed(v) {
+                                Button("Новый ключ…") { newKeyFor = v.container }
+                                    .disabled(!v.running)
+                            }
+                        }
+                        if (v.peers ?? []).isEmpty {
+                            Text("Ключей пока нет").foregroundStyle(.secondary)
+                        } else {
+                            PeersTable(peers: v.peers ?? [], onDelete: managed(v) ? { [server] key in
+                                try await model.backend.deleteVPNKey(server: server, container: v.container,
+                                                                     publicKey: key, password: nil)
+                            } : nil)
+                        }
                     }
                 }
+            }
+            .sheet(item: Binding(get: { newKeyFor.map(ContainerRef.init) }, set: { newKeyFor = $0?.id })) { ref in
+                NewVPNKeySheet(model: model, server: server, container: ref.id)
             }
         }
     }
 }
 
+struct ContainerRef: Identifiable { var id: String }
+
 struct PeersTable: View {
     var peers: [Snapshot.VPN.Peer]
+    /// Set when keys in this container can be deleted.
+    var onDelete: ((String) async throws -> Void)?
     @State private var sort = [KeyPathComparator(\PeerRow.lastSeen, order: .reverse)]
+    @State private var confirm: PeerRow?
+    @State private var deleting: String?
+    @State private var error: String?
 
     var body: some View {
-        Table(peers.map(PeerRow.init).sorted(using: sort), sortOrder: $sort) {
+        let rows = peers.map(PeerRow.init).sorted(using: sort)
+        Table(rows, sortOrder: $sort) {
             TableColumn("Клиент", value: \.name) { p in
                 HStack(spacing: 7) {
                     StatusDot(level: p.peer.active ? .ok : .unknown)
                     Text(p.name)
+                    if deleting == p.id { ProgressView().controlSize(.mini) }
                 }
             }
             TableColumn("Последнее подключение", value: \.lastSeen) { p in
@@ -136,7 +171,46 @@ struct PeersTable: View {
             TableColumn("Скачал ↓", value: \.tx) { p in Text(Fmt.bytes(p.peer.txBytes)).monospacedDigit() }
             TableColumn("Отдал ↑", value: \.rx) { p in Text(Fmt.bytes(p.peer.rxBytes)).monospacedDigit() }
         }
+        .contextMenu(forSelectionType: String.self) { ids in
+            if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
+                Button("Скопировать публичный ключ") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(row.peer.publicKey, forType: .string)
+                }
+                if onDelete != nil {
+                    Divider()
+                    Button("Удалить ключ…", role: .destructive) { confirm = row }
+                        .disabled(deleting != nil)
+                }
+            }
+        }
         .frame(height: tableHeight(peers.count, max: 24))
+        .confirmationDialog("Удалить ключ «\(confirm?.name ?? "")»?", isPresented: Binding(
+            get: { confirm != nil }, set: { if !$0 { confirm = nil } })) {
+            Button("Удалить", role: .destructive) {
+                if let row = confirm { remove(row.peer.publicKey) }
+                confirm = nil
+            }
+        } message: {
+            Text("Устройство с этим ключом сразу перестанет подключаться к VPN. Отменить это нельзя, только выдать новый ключ.")
+        }
+        .alert("Ключ не удалён", isPresented: Binding(
+            get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK") { error = nil }
+        } message: {
+            Text(error ?? "")
+        }
+    }
+
+    private func remove(_ publicKey: String) {
+        guard let onDelete else { return }
+        deleting = publicKey
+        Task {
+            do { try await onDelete(publicKey) } catch {
+                self.error = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            }
+            deleting = nil
+        }
     }
 }
 

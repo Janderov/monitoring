@@ -36,6 +36,13 @@ public protocol MonitorBackend: AnyObject, Sendable {
     func savedPassword(serverID: String) -> String?
     /// Nil forgets the saved password.
     func setSavedPassword(_ password: String?, serverID: String) throws
+
+    // AmneziaWG keys, over SSH from the Mac. Without a password the saved one
+    // (if any) is used, otherwise the SSH key.
+    func createVPNKey(server: ServerConfig, container: String, name: String,
+                      password: String?) async throws -> AWGNewClient
+    func deleteVPNKey(server: ServerConfig, container: String, publicKey: String,
+                      password: String?) async throws
 }
 
 public struct BackendError: LocalizedError {
@@ -139,6 +146,25 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
     public func setSavedPassword(_ password: String?, serverID: String) throws {
         let key = SecretKey.sshPassword(serverID)
         if let password, !password.isEmpty { try secrets.set(password, for: key) } else { try secrets.remove(key) }
+    }
+
+    // MARK: VPN keys
+
+    private func keys(_ server: ServerConfig, _ password: String?) -> AmneziaKeys {
+        AmneziaKeys(server: server, password: password ?? savedPassword(serverID: server.id))
+    }
+
+    public func createVPNKey(server: ServerConfig, container: String, name: String,
+                             password: String?) async throws -> AWGNewClient {
+        let new = try await keys(server, password).create(container: container, name: name)
+        await pollNow()
+        return new
+    }
+
+    public func deleteVPNKey(server: ServerConfig, container: String, publicKey: String,
+                             password: String?) async throws {
+        try await keys(server, password).delete(container: container, publicKey: publicKey)
+        await pollNow()
     }
 }
 
