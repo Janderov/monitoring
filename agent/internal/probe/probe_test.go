@@ -75,6 +75,10 @@ func TestRunHTTPAndTCP(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer bad.Close()
+	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer auth.Close()
 	// The test server's certificate is self-signed; trust it for this test.
 	tr := httpClient.Transport.(*http.Transport)
 	tr.TLSClientConfig.RootCAs = ok.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
@@ -87,6 +91,7 @@ func TestRunHTTPAndTCP(t *testing.T) {
 		{ID: "bad", Kind: "http", URL: bad.URL},
 		{ID: "tcp-up", Kind: "tcp", Host: host, Port: p},
 		{ID: "tcp-down", Kind: "tcp", Host: "127.0.0.1", Port: 1, TimeoutSeconds: 1},
+		{ID: "auth", Kind: "http", URL: auth.URL},
 	})
 	if r := res[0]; !r.OK || r.StatusCode != 200 || r.TLSExpiry == nil || r.TLSExpiry.Before(time.Now()) {
 		t.Errorf("ok = %+v", r)
@@ -99,6 +104,9 @@ func TestRunHTTPAndTCP(t *testing.T) {
 	}
 	if res[3].OK || res[3].Error == "" {
 		t.Errorf("tcp-down = %+v", res[3])
+	}
+	if r := res[4]; !r.OK || r.StatusCode != 401 || r.Error != "" {
+		t.Errorf("auth = %+v", r)
 	}
 }
 
