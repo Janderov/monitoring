@@ -25,7 +25,7 @@ jobs:
         working-directory: app
     steps:
       - uses: actions/checkout@v4
-      - run: apt-get update -qq && apt-get install -y -qq libsqlite3-dev
+      - run: apt-get update -qq && apt-get install -y -qq libsqlite3-dev softhsm2
       - run: swift test
 
   # The menu bar app itself only builds on macOS.
