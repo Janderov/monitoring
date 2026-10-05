@@ -30,6 +30,7 @@ type Snapshot struct {
 	Processes       []Process   `json:"processes,omitempty"`
 	VPN             []VPN       `json:"vpn,omitempty"`
 	Services        []Service   `json:"services,omitempty"`
+	Databases       []Database  `json:"databases,omitempty"`
 	Checks          []Check     `json:"checks,omitempty"`
 	Links           []Link      `json:"links,omitempty"`
 	// Forwards: client traffic this server passes on (NAT), by real destination.

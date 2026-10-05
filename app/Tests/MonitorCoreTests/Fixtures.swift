@@ -26,6 +26,8 @@ enum Fixtures {
                    "clients": 24, "active_clients": 3, "rx_bytes": 5, "tx_bytes": 6,
                    "peers": [{"name": "phone", "public_key": "k=", "latest_handshake": "2026-10-05T07:57:00Z",
                               "active": true, "rx_bytes": 1, "tx_bytes": 2}]}],
+          "databases": [{"container": "shop-db", "engine": "postgresql", "connections": 7, "max_connections": 100,
+                         "databases": [{"name": "shop", "size_bytes": 52428800}, {"name": "postgres", "size_bytes": 7700000}]}],
           "services": [{"name": "nginx", "kind": "web", "process_running": true, "port": 443,
                         "port_open": true, "latency_ms": 0.4}],
           "checks": [{"id": "site", "kind": "http", "target": "https://example.org", "ok": true,

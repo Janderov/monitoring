@@ -85,6 +85,13 @@ public actor Store {
           rx INTEGER NOT NULL, tx INTEGER NOT NULL,
           PRIMARY KEY (server_id, public_key, day)) WITHOUT ROWID;
         """,
+        // Agent-to-agent checks (latency between servers), 30 days.
+        """
+        CREATE TABLE link_samples (
+          server_id TEXT NOT NULL, peer_id TEXT NOT NULL, ts INTEGER NOT NULL,
+          ok INTEGER NOT NULL, latency_ms REAL,
+          PRIMARY KEY (server_id, peer_id, ts)) WITHOUT ROWID;
+        """,
     ]
 
     public static var schemaVersion: Int { migrations.count }
@@ -170,6 +177,24 @@ public actor Store {
         }
     }
 
+    /// Stores the agent-to-agent checks (`peer-<id>`) found in snapshots.
+    public func addLinkSamples(serverID: String, _ snaps: [Snapshot]) throws {
+        let rows = snaps.flatMap { snap in
+            (snap.checks ?? []).filter { $0.id.hasPrefix(ServerConfig.peerCheckPrefix) }.map { (snap.time, $0) }
+        }
+        guard !rows.isEmpty else { return }
+        try db.transaction {
+            let st = try db.prepare("""
+            INSERT OR REPLACE INTO link_samples (server_id, peer_id, ts, ok, latency_ms) VALUES (?, ?, ?, ?, ?)
+            """)
+            for (time, c) in rows {
+                try st.run(.text(serverID), .text(String(c.id.dropFirst(ServerConfig.peerCheckPrefix.count))),
+                           .int(Int64(time.timeIntervalSince1970)), .int(c.ok ? 1 : 0),
+                           c.ok ? .real(c.latencyMs) : .null)
+            }
+        }
+    }
+
     public func setDomain(_ domain: String, _ e: DomainExpiry.Entry) throws {
         try db.prepare("INSERT OR REPLACE INTO domains (domain, expiry, error, checked_at) VALUES (?, ?, ?, ?)")
             .run(.text(domain), e.expiry.map { .int(Int64($0.timeIntervalSince1970)) } ?? .null,
@@ -233,6 +258,7 @@ public actor Store {
             try db.prepare("DELETE FROM samples WHERE ts < ?").run(.int(sampleCut))
             try db.prepare("DELETE FROM polls WHERE ts < ?").run(.int(sampleCut))
             try db.prepare("DELETE FROM site_samples WHERE ts < ?").run(.int(sampleCut))
+            try db.prepare("DELETE FROM link_samples WHERE ts < ?").run(.int(sampleCut))
             try db.prepare("DELETE FROM hourly WHERE hour < ?").run(.int(hourlyCut))
             try db.prepare("DELETE FROM events WHERE ts < ?").run(.int(hourlyCut))
             try db.prepare("DELETE FROM vpn_traffic WHERE day < ?").run(.int(hourlyCut))
@@ -242,9 +268,10 @@ public actor Store {
     /// Drops everything about servers no longer in the config except the
     /// event log, which stays readable.
     public func forget(serverID: String) throws {
-        for table in ["samples", "hourly", "polls", "latest", "vpn_counters", "vpn_traffic"] {
+        for table in ["samples", "hourly", "polls", "latest", "vpn_counters", "vpn_traffic", "link_samples"] {
             try db.prepare("DELETE FROM \(table) WHERE server_id = ?").run(.text(serverID))
         }
+        try db.prepare("DELETE FROM link_samples WHERE peer_id = ?").run(.text(serverID))
     }
 
     // MARK: reads
@@ -275,6 +302,27 @@ public actor Store {
                 Sample(time: Date(timeIntervalSince1970: TimeInterval(r.int(0) ?? 0)),
                        cpu: r.real(1) ?? 0, mem: r.real(2) ?? 0, disk: r.real(3) ?? 0, load1: r.real(4) ?? 0,
                        rx: r.real(5) ?? 0, tx: r.real(6) ?? 0, vpnClients: Int(r.int(7) ?? 0))
+            }
+    }
+
+    /// One check from a server to another server's agent port; the latency
+    /// is the TCP connect time, close to the round trip between them.
+    public struct LinkSample: Equatable, Sendable {
+        public var peerID: String
+        public var time: Date
+        public var ok: Bool
+        public var latencyMs: Double?
+    }
+
+    /// Checks made by `serverID` to the other servers, oldest first.
+    public func linkSamples(_ serverID: String, from: Date, to: Date) throws -> [LinkSample] {
+        try db.prepare("""
+        SELECT peer_id, ts, ok, latency_ms FROM link_samples
+        WHERE server_id = ? AND ts >= ? AND ts <= ? ORDER BY ts, peer_id
+        """).rows(.text(serverID), .int(Int64(from.timeIntervalSince1970)), .int(Int64(to.timeIntervalSince1970)))
+            .map { r in
+                LinkSample(peerID: r.text(0) ?? "", time: Date(timeIntervalSince1970: TimeInterval(r.int(1) ?? 0)),
+                           ok: r.int(2) == 1, latencyMs: r.real(3))
             }
     }
 

@@ -19,6 +19,8 @@ public protocol MonitorBackend: AnyObject, Sendable {
     func hourly(_ serverID: String, from: Date, to: Date) async throws -> [Store.Hourly]
     func events(limit: Int, serverID: String?) async throws -> [Store.LoggedEvent]
     func siteSamples(_ siteID: String, from: Date, to: Date) async throws -> [Store.SiteSample]
+    /// Latency checks from one server to the others (agent ports), oldest first.
+    func linkSamples(_ serverID: String, from: Date, to: Date) async throws -> [Store.LinkSample]
     /// Traffic per VPN client (by public key) over the local days touching [from, to].
     func vpnTraffic(_ serverID: String, from: Date, to: Date) async throws -> [String: Store.VPNUsage]
     /// One client's traffic per day, oldest first.
@@ -50,6 +52,10 @@ public protocol MonitorBackend: AnyObject, Sendable {
                       password: String?) async throws -> AWGNewClient
     func deleteVPNKey(server: ServerConfig, container: String, publicKey: String, name: String,
                       password: String?) async throws
+
+    // Restarts over SSH, with the same password rules; both go to the audit log.
+    func restartContainer(server: ServerConfig, container: String, password: String?) async throws
+    func rebootServer(server: ServerConfig, password: String?) async throws
 
     /// Checks the permission, runs `body` and writes the outcome to the
     /// audit log ("Журнал действий").
@@ -124,6 +130,10 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
 
     public func siteSamples(_ siteID: String, from: Date, to: Date) async throws -> [Store.SiteSample] {
         try await store?.siteSamples(siteID, from: from, to: to) ?? []
+    }
+
+    public func linkSamples(_ serverID: String, from: Date, to: Date) async throws -> [Store.LinkSample] {
+        try await store?.linkSamples(serverID, from: from, to: to) ?? []
     }
 
     public func vpnTraffic(_ serverID: String, from: Date, to: Date) async throws -> [String: Store.VPNUsage] {
@@ -241,6 +251,23 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
             try await keys.delete(container: container, publicKey: publicKey)
         }
         await pollNow()
+    }
+
+    // MARK: Restarts
+
+    public func restartContainer(server: ServerConfig, container: String, password: String?) async throws {
+        let control = ServerControl(server: server, password: password ?? savedPassword(serverID: server.id))
+        try await audited(.restart, on: .server(server), detail: "перезапуск контейнера \(container)") {
+            try await control.restartContainer(container)
+        }
+        await pollNow()
+    }
+
+    public func rebootServer(server: ServerConfig, password: String?) async throws {
+        let control = ServerControl(server: server, password: password ?? savedPassword(serverID: server.id))
+        try await audited(.restart, on: .server(server), detail: "перезагрузка сервера") {
+            try await control.reboot()
+        }
     }
 }
 

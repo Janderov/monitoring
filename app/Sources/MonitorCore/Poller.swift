@@ -319,6 +319,7 @@ public actor Poller {
             let history = try await client.history(s, since: since)
             try await store.addSamples(s.id, history)
             try await store.addSiteSamples(serverID: s.id, history)
+            try await store.addLinkSamples(serverID: s.id, history)
             // A failed push is retried next round; it must not hide the server's metrics.
             var pushed: [CheckTarget]?
             if let push {

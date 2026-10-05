@@ -18,6 +18,8 @@ public struct Snapshot: Codable, Equatable, Sendable {
     public var processes: [Process]?
     public var vpn: [VPN]?
     public var services: [Service]?
+    /// PostgreSQL and MySQL containers: connections and database sizes.
+    public var databases: [Database]?
     public var checks: [Check]?
     /// Outgoing connections to public addresses (agent 0.4+), for VPN cascades.
     public var links: [Link]?
@@ -106,6 +108,23 @@ public struct Snapshot: Codable, Equatable, Sendable {
             /// "0.0.0.0/0" here means traffic leaves through this peer.
             public var allowedIps: String?
         }
+    }
+
+    public struct Database: Codable, Equatable, Sendable {
+        public var container: String
+        /// "postgresql" or "mysql".
+        public var engine: String
+        public var connections: Int
+        public var maxConnections: Int?
+        public var databases: [Size]?
+        public var error: String?
+
+        public struct Size: Codable, Equatable, Sendable {
+            public var name: String
+            public var sizeBytes: Int64
+        }
+
+        public var totalBytes: Int64 { (databases ?? []).reduce(0) { $0 + $1.sizeBytes } }
     }
 
     public struct Link: Codable, Equatable, Sendable {
