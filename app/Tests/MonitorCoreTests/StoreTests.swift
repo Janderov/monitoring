@@ -81,4 +81,15 @@ final class StoreTests: XCTestCase {
         let kept = try await reopened.events()
         XCTAssertEqual(kept.count, 1) // the log stays
     }
+
+    func testSchemaVersionAndNewerDatabaseRejected() async throws {
+        let path = dir.appendingPathComponent("m.sqlite").path
+        _ = try Store(path: path)
+        let db = try SQLiteDB(path: path)
+        XCTAssertEqual(try db.prepare("PRAGMA user_version").rows().first?.int(0), Int64(Store.schemaVersion))
+        _ = try Store(path: path) // reopening re-runs nothing
+
+        try db.exec("PRAGMA user_version = \(Store.schemaVersion + 1)")
+        XCTAssertThrowsError(try Store(path: path))
+    }
 }

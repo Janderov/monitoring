@@ -15,9 +15,16 @@ public actor Store {
 
     public init(path: String) throws {
         db = try SQLiteDB(path: path)
-        try db.exec("""
-        PRAGMA journal_mode = WAL;
-        PRAGMA synchronous = NORMAL;
+        try db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
+        try Store.migrate(db)
+    }
+
+    /// Schema changes, applied in order and recorded in `PRAGMA user_version`.
+    /// Never edit a shipped entry: append a new one (users and roles, an audit
+    /// log of VPN key changes and the like will arrive this way), so an
+    /// existing monitor.sqlite upgrades in place.
+    static let migrations: [String] = [
+        """
         CREATE TABLE IF NOT EXISTS samples (
           server_id TEXT NOT NULL, ts INTEGER NOT NULL,
           cpu REAL, mem REAL, disk REAL, load1 REAL, rx REAL, tx REAL, vpn_clients INTEGER,
@@ -37,7 +44,22 @@ public actor Store {
           id INTEGER PRIMARY KEY AUTOINCREMENT, server_id TEXT NOT NULL, ts INTEGER NOT NULL,
           key TEXT NOT NULL, kind TEXT NOT NULL, severity INTEGER NOT NULL, message TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
-        """)
+        """,
+    ]
+
+    public static var schemaVersion: Int { migrations.count }
+
+    static func migrate(_ db: SQLiteDB) throws {
+        let current = Int(try db.prepare("PRAGMA user_version").rows().first?.int(0) ?? 0)
+        guard current <= migrations.count else {
+            throw SQLiteError(description: "monitor.sqlite is from a newer app version (schema \(current))")
+        }
+        for (i, sql) in migrations.enumerated() where i >= current {
+            try db.transaction {
+                try db.exec(sql)
+                try db.exec("PRAGMA user_version = \(i + 1)")
+            }
+        }
     }
 
     // MARK: writes
