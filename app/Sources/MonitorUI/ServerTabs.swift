@@ -52,6 +52,8 @@ struct ServicesTab: View {
 }
 
 struct ContainersTab: View {
+    @ObservedObject var model: AppModel
+    var server: ServerConfig
     var containers: [Snapshot.Container]
 
     var body: some View {
@@ -69,6 +71,13 @@ struct ContainersTab: View {
                 TableColumn("Состояние") { c in Text(c.state) }
                 TableColumn("Health") { c in Text(c.health ?? "—") }
                 TableColumn("Статус") { c in Text(c.status).foregroundStyle(.secondary) }
+                TableColumn("") { c in
+                    if model.can(.restart, server) {
+                        Button("Перезапустить…") { model.present(.restartContainer(server.id, c.name)) }
+                            .controlSize(.small)
+                    }
+                }
+                .width(min: 110, ideal: 120)
             }
             .fitRows(containers.count, max: 20)
         }
