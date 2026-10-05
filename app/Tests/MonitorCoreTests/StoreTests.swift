@@ -113,4 +113,38 @@ final class StoreTests: XCTestCase {
         let left = try db.prepare("SELECT message FROM events").rows().map { $0.text(0) }
         XCTAssertEqual(left, ["сайт t недоступен: 502 Bad Gateway"])
     }
+
+    func testVPNTrafficPerDay() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try Store(path: dir.appendingPathComponent("m.sqlite").path)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Europe/Moscow")!
+
+        let day1 = Date(timeIntervalSince1970: 1_790_000_000) // 2026-09-21 17:13 MSK
+        func snap(_ t: Date, rx: UInt64, tx: UInt64) -> Snapshot {
+            var s = Fixtures.snapshot(time: t)
+            s.vpn?[0].peers?[0].rxBytes = rx
+            s.vpn?[0].peers?[0].txBytes = tx
+            return s
+        }
+        // The first sighting only sets the baseline.
+        try await store.addVPNTraffic("nl", snap(day1, rx: 1_000, tx: 5_000), calendar: cal)
+        try await store.addVPNTraffic("nl", snap(day1.addingTimeInterval(60), rx: 1_500, tx: 9_000), calendar: cal)
+        // Next day the VPN restarted: counters start again from zero.
+        let day2 = day1.addingTimeInterval(86400)
+        try await store.addVPNTraffic("nl", snap(day2, rx: 200, tx: 300), calendar: cal)
+
+        let today = try await store.vpnTraffic("nl", from: day2, to: day2, calendar: cal)
+        XCTAssertEqual(today["k="], Store.VPNUsage(rx: 200, tx: 300))
+        let both = try await store.vpnTraffic("nl", from: day1, to: day2, calendar: cal)
+        XCTAssertEqual(both["k="], Store.VPNUsage(rx: 700, tx: 4_300))
+        let daily = try await store.vpnDaily("nl", publicKey: "k=", from: day1, to: day2, calendar: cal)
+        XCTAssertEqual(daily.map(\.usage.total), [4_500, 500])
+
+        try await store.forget(serverID: "nl")
+        let gone = try await store.vpnTraffic("nl", from: day1, to: day2, calendar: cal)
+        XCTAssertTrue(gone.isEmpty)
+    }
 }

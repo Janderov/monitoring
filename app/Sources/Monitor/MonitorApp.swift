@@ -7,6 +7,7 @@ import UserNotifications
 
 @main
 struct MonitorApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     private let notifier: Notifier
     @StateObject private var model: AppModel
 
@@ -21,6 +22,7 @@ struct MonitorApp: App {
     var body: some Scene {
         Window("Монитор", id: MainWindow.id) {
             MainWindow(model: model)
+                .background(ReopenHook())
         }
         .defaultSize(width: 1180, height: 760)
         .commands {
@@ -30,15 +32,45 @@ struct MonitorApp: App {
 
         Window("Настройки", id: SettingsView.id) {
             SettingsView(model: model)
+                .background(ReopenHook())
         }
         .windowResizability(.contentSize)
 
         MenuBarExtra {
             MenuBarContent(model: model)
+                .background(ReopenHook())
         } label: {
             Image(nsImage: MenuBarIcon.image(for: model.overall))
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Opening the app again (Dock icon, Finder, Launchpad) while it runs with no
+/// window shows the main window. SwiftUI does not reopen a closed `Window`
+/// scene by itself, so the delegate keeps an `openWindow` action from whichever
+/// of our views appeared last; it stays valid after that view goes away.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    static var openMain: (() -> Void)?
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // Opening an already open Window scene only brings it to the front.
+        if let open = Self.openMain {
+            NSApp.activate(ignoringOtherApps: true)
+            open()
+        }
+        return true
+    }
+}
+
+private struct ReopenHook: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear.onAppear {
+            AppDelegate.openMain = { [openWindow] in openWindow(id: MainWindow.id) }
+        }
     }
 }
 

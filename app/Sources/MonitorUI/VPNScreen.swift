@@ -47,11 +47,14 @@ struct VPNScreen: View {
             Group {
                 if let id = selection, let r = rows.first(where: { $0.id == id }) {
                     if let peers = r.vpn.peers, !peers.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Клиенты \(r.vpn.protocol) на \(r.server.name)").font(.headline)
-                            PeersTable(peers: peers)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Клиенты \(r.vpn.protocol) на \(r.server.name)").font(.headline)
+                                VPNClientsPanel(model: model, serverID: r.server.id, peers: peers)
+                                    .id(r.id)
+                            }
+                            .padding(16)
                         }
-                        .padding(16)
                     } else {
                         EmptyNote(title: "Список клиентов для \(r.vpn.protocol) пока не читается")
                     }

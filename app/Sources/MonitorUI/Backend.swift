@@ -13,10 +13,17 @@ public protocol MonitorBackend: AnyObject, Sendable {
     /// Re-reads the server list and polls right away.
     func reload() async throws
     func pollNow() async
+    /// How often the screens refresh and the agents sample (Poller.refreshChoices).
+    func setRefreshInterval(_ seconds: TimeInterval) async
     func samples(_ serverID: String, from: Date, to: Date) async throws -> [Store.Sample]
     func hourly(_ serverID: String, from: Date, to: Date) async throws -> [Store.Hourly]
     func events(limit: Int, serverID: String?) async throws -> [Store.LoggedEvent]
     func siteSamples(_ siteID: String, from: Date, to: Date) async throws -> [Store.SiteSample]
+    /// Traffic per VPN client (by public key) over the local days touching [from, to].
+    func vpnTraffic(_ serverID: String, from: Date, to: Date) async throws -> [String: Store.VPNUsage]
+    /// One client's traffic per day, oldest first.
+    func vpnDaily(_ serverID: String, publicKey: String, from: Date, to: Date) async throws
+        -> [(day: Date, usage: Store.VPNUsage)]
 
     // Editing the server and site lists. Each change is saved and applied
     // (the poller picks it up) before the call returns.
@@ -82,6 +89,8 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
         self.poller = poller
         self.auditor = Auditor(store: store)
         await poller.setSitesHandler(onSites)
+        let saved = UserDefaults.standard.double(forKey: Poller.refreshDefaultsKey)
+        if saved > 0 { await poller.setRefreshInterval(saved) }
         await poller.start()
     }
 
@@ -94,6 +103,11 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
 
     public func pollNow() async {
         await poller?.pollAll(now: Date())
+    }
+
+    public func setRefreshInterval(_ seconds: TimeInterval) async {
+        UserDefaults.standard.set(seconds, forKey: Poller.refreshDefaultsKey)
+        await poller?.setRefreshInterval(seconds)
     }
 
     public func samples(_ serverID: String, from: Date, to: Date) async throws -> [Store.Sample] {
@@ -110,6 +124,15 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
 
     public func siteSamples(_ siteID: String, from: Date, to: Date) async throws -> [Store.SiteSample] {
         try await store?.siteSamples(siteID, from: from, to: to) ?? []
+    }
+
+    public func vpnTraffic(_ serverID: String, from: Date, to: Date) async throws -> [String: Store.VPNUsage] {
+        try await store?.vpnTraffic(serverID, from: from, to: to) ?? [:]
+    }
+
+    public func vpnDaily(_ serverID: String, publicKey: String, from: Date, to: Date) async throws
+        -> [(day: Date, usage: Store.VPNUsage)] {
+        try await store?.vpnDaily(serverID, publicKey: publicKey, from: from, to: to) ?? []
     }
 
     // MARK: Editing servers.json
