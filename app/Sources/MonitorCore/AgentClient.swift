@@ -25,6 +25,15 @@ public struct AgentClient: Sendable {
 
     public init(transport: AgentTransport) { self.transport = transport }
 
+    public struct Health: Decodable, Sendable {
+        public var status: String
+        public var version: String
+    }
+
+    public func health(_ server: ServerConfig) async throws -> Health {
+        try decode(Health.self, try await get(server, "/v1/health"))
+    }
+
     public func snapshot(_ server: ServerConfig) async throws -> Snapshot {
         try decode(Snapshot.self, try await get(server, "/v1/snapshot"))
     }
