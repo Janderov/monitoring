@@ -19,6 +19,8 @@ public final class AppModel: ObservableObject {
     @Published public var selectedSiteID: String?
     /// Sidebar filter by group or tag; nil shows everything.
     @Published public var filter: Filter?
+    /// The add or edit form shown over the main window.
+    @Published public var sheet: EditSheet?
 
     public let backend: MonitorBackend
     public let locations: ServerLocations
@@ -99,10 +101,50 @@ public final class AppModel: ObservableObject {
         NSPasteboard.general.setString(server.host, forType: .string)
     }
 
+    // MARK: Editing
+
+    public var siteConfigs: [SiteConfig] { siteStatuses.map(\.site) }
+
+    /// Opens the add/edit form in the main window (also from the menu bar).
+    public func present(_ sheet: EditSheet) { self.sheet = sheet }
+
+    public func save(server: ServerConfig) async throws {
+        try await backend.upsertServer(server)
+        configError = nil
+    }
+
+    public func delete(server id: String) async throws {
+        try await backend.removeServer(id: id)
+        if selectedServerID == id { selectedServerID = nil }
+        locations.set(nil, for: id)
+    }
+
+    public func save(site: SiteConfig) async throws {
+        try await backend.upsertSite(site)
+        configError = nil
+    }
+
+    public func delete(site id: String) async throws {
+        try await backend.removeSite(id: id)
+        if selectedSiteID == id { selectedSiteID = nil }
+    }
+
     public func openConfig() { NSWorkspace.shared.open(DataFolder.serversFile) }
     public func openDataFolder() { NSWorkspace.shared.open(DataFolder.url) }
 
     private func describe(_ error: Error) -> String { String(describing: error) }
+}
+
+public enum EditSheet: Identifiable, Hashable, Sendable {
+    case addServer, editServer(String), addSite, editSite(String)
+    public var id: String {
+        switch self {
+        case .addServer: return "add-server"
+        case .editServer(let id): return "server-\(id)"
+        case .addSite: return "add-site"
+        case .editSite(let id): return "site-\(id)"
+        }
+    }
 }
 
 public enum AppSection: Hashable, Sendable {

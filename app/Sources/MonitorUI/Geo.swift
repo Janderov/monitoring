@@ -68,8 +68,9 @@ public final class ServerLocations: ObservableObject {
         return Country.detect(server)?.coordinate
     }
 
-    public func set(_ c: CLLocationCoordinate2D, for serverID: String) {
-        overrides[serverID] = [c.latitude, c.longitude]
+    /// Nil goes back to the country's default place.
+    public func set(_ c: CLLocationCoordinate2D?, for serverID: String) {
+        overrides[serverID] = c.map { [$0.latitude, $0.longitude] }
         UserDefaults.standard.set(overrides, forKey: key)
     }
 }

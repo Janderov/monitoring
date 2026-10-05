@@ -18,8 +18,12 @@ struct ServersScreen: View {
                     ServerDetail(model: model, status: s)
                         .id(id)
                 } else {
-                    EmptyNote(title: model.statuses.isEmpty ? "Серверов пока нет" : "Выберите сервер",
-                              detail: model.statuses.isEmpty ? "Добавьте их в servers.json (кнопка «+» в панели)" : nil)
+                    if model.statuses.isEmpty {
+                        EmptyNote(title: "Серверов пока нет", detail: nil,
+                                  actionTitle: "Добавить сервер…", action: { model.present(.addServer) })
+                    } else {
+                        EmptyNote(title: "Выберите сервер")
+                    }
                 }
             }
             .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
@@ -125,6 +129,10 @@ struct ServerContextMenu: View {
         Button("Показать на карте") {
             model.selectedServerID = server.id
             model.section = .map
+        }
+        if model.can(.editConfig, server) {
+            Divider()
+            Button("Изменить…") { model.present(.editServer(server.id)) }
         }
     }
 }

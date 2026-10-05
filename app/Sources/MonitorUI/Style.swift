@@ -110,11 +110,16 @@ struct Fact: View {
 struct EmptyNote: View {
     var title: String
     var detail: String?
+    var actionTitle: String?
+    var action: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 4) {
             Text(title).foregroundStyle(.secondary)
             if let detail { Text(detail).font(.caption).foregroundStyle(.tertiary) }
+            if let actionTitle, let action {
+                Button(actionTitle, action: action).padding(.top, 8)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .multilineTextAlignment(.center)

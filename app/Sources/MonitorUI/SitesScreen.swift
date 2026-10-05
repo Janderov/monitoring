@@ -22,6 +22,21 @@ struct SitesTable: View {
             TableColumn("SSL") { s in days(s.tlsExpiry, warn: 14) }.width(min: 40, ideal: 56)
             TableColumn("Домен") { s in days(s.domainExpiry, warn: 30) }.width(min: 40, ideal: 60)
         }
+        .contextMenu(forSelectionType: String.self) { ids in
+            if let id = ids.first, let site = sites.first(where: { $0.id == id }) {
+                if let url = URL(string: site.url) {
+                    Button("Открыть в браузере") { NSWorkspace.shared.open(url) }
+                }
+                Button("Изменить…") { model.present(.editSite(id)) }
+            } else {
+                Button("Добавить сайт…") { model.present(.addSite) }
+            }
+        } primaryAction: { ids in
+            if let id = ids.first {
+                model.section = .sites
+                model.selectedSiteID = id
+            }
+        }
     }
 
     private func origin(_ o: SiteSummary.Origin) -> String {
@@ -50,8 +65,8 @@ struct SitesScreen: View {
                 if let id = model.selectedSiteID, let site = sites.first(where: { $0.id == id }) {
                     SiteDetail(model: model, site: site)
                 } else if sites.isEmpty {
-                    EmptyNote(title: "Сайтов пока нет",
-                              detail: "Добавьте сайты в servers.json (раздел sites)")
+                    EmptyNote(title: "Сайтов пока нет", detail: "Каждый сайт проверяется раз в минуту со всех серверов",
+                              actionTitle: "Добавить сайт…", action: { model.present(.addSite) })
                 } else {
                     EmptyNote(title: "Выберите сайт")
                 }
@@ -85,6 +100,7 @@ private struct SiteDetail: View {
                     if let url = URL(string: site.url) {
                         Button("Открыть в браузере") { NSWorkspace.shared.open(url) }
                     }
+                    Button("Изменить…") { model.present(.editSite(site.id)) }
                 }
                 ForEach(site.alerts, id: \.key) { a in
                     AlertStrip(level: a.severity.level, text: a.message, trailing: Fmt.since(a.since))
