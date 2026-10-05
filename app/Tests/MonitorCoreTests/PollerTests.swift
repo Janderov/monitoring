@@ -155,4 +155,65 @@ final class PollerTests: XCTestCase {
         await poller.pollAll(now: Date(timeIntervalSince1970: 1_790_000_060))
         XCTAssertFalse(agent.requests.contains("PUT /v1/settings"))
     }
+
+    func testSilentServerIsNeverGreen() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let agent = FakeAgent()
+        agent.history = [Fixtures.snapshot(time: t0)]
+        let store = try Store(path: dir.appendingPathComponent("m.sqlite").path)
+        let out = Collector()
+        let poller = Poller(client: AgentClient(transport: agent), store: store,
+                            onUpdate: { out.set($0) }, onEvents: { out.add($0) })
+        await poller.setServers([Fixtures.server])
+        await poller.setRefreshInterval(10)
+        _ = await poller.tick(now: t0)
+        XCTAssertEqual(out.statuses.first?.level, .ok)
+
+        // Rebooting on request: orange "перезагружается", no "down" alert.
+        await poller.markRebooting("nl", now: t0.addingTimeInterval(5))
+        XCTAssertEqual(out.statuses.first?.level, .warning)
+        XCTAssertEqual(out.statuses.first?.alerts.first?.message, "перезагружается")
+        agent.down = true
+        for m in 1...4 { _ = await poller.tick(now: t0.addingTimeInterval(TimeInterval(m * 60))) }
+        XCTAssertTrue(out.events.isEmpty)
+        XCTAssertEqual(out.statuses.first?.alerts.map(\.key), ["rebooting"])
+
+        // Back with a new boot time: green again.
+        agent.down = false
+        var after = Fixtures.snapshot(time: t0.addingTimeInterval(300))
+        after.bootTime = t0.addingTimeInterval(60)
+        agent.history = [after]
+        _ = await poller.tick(now: t0.addingTimeInterval(310))
+        XCTAssertEqual(out.statuses.first?.level, .ok)
+    }
+
+    func testUnexpectedSilenceTurnsOrangeThenRed() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let agent = FakeAgent()
+        agent.history = [Fixtures.snapshot(time: t0)]
+        let store = try Store(path: dir.appendingPathComponent("m.sqlite").path)
+        let out = Collector()
+        let poller = Poller(client: AgentClient(transport: agent), store: store,
+                            onUpdate: { out.set($0) }, onEvents: { out.add($0) })
+        await poller.setServers([Fixtures.server])
+        await poller.setRefreshInterval(10)
+        _ = await poller.tick(now: t0)
+
+        // The first missed snapshot, even between full rounds, is orange.
+        agent.down = true
+        _ = await poller.tick(now: t0.addingTimeInterval(10))
+        XCTAssertEqual(out.statuses.first?.level, .warning)
+        XCTAssertEqual(out.statuses.first?.alerts.first?.key, "noreply")
+
+        // Three missed full rounds: the "down" alert makes it red.
+        for m in 1...3 { _ = await poller.tick(now: t0.addingTimeInterval(TimeInterval(m * 60))) }
+        XCTAssertEqual(out.statuses.first?.level, .critical)
+        XCTAssertEqual(out.statuses.first?.alerts.map(\.key), ["down"])
+    }
 }

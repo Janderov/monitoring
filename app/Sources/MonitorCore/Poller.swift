@@ -48,6 +48,13 @@ public actor Poller {
     private var statuses: [String: ServerStatus] = [:]
     private var task: Task<Void, Never>?
     private var refresh: TimeInterval = Poller.interval
+    /// Servers asked to reboot from the app, with when.
+    private var rebooting: [String: Date] = [:]
+    /// When each unreachable server first stopped answering.
+    private var failingSince: [String: Date] = [:]
+    private var macOffline = false
+    /// How long a reboot may take before it counts as a plain outage.
+    public static let rebootGrace: TimeInterval = 10 * 60
     private var lastFullRound: Date?
 
     private var sites: [SiteConfig] = []
@@ -99,6 +106,8 @@ public actor Poller {
         for old in servers where !ids.contains(old.id) {
             try? await store.forget(serverID: old.id)
             statuses[old.id] = nil
+            rebooting[old.id] = nil
+            failingSince[old.id] = nil
         }
         engine.retain(serverIDs: ids.union(sites.map { SiteStatus.alertID($0.id) }))
         pushedTargets = pushedTargets.filter { ids.contains($0.key) }
@@ -151,22 +160,32 @@ public actor Poller {
     }
 
     /// Fetches only the current snapshot of every server and redraws. Nothing
-    /// is stored and no alert changes: a failure here waits for the full round.
+    /// is stored and no alert fires here; a server that stops answering turns
+    /// orange at once and red when the full round's "down" alert fires.
     public func refreshLive(now: Date) async {
         let list = servers
-        let snaps = await withTaskGroup(of: (String, Snapshot?).self) { group in
+        let results = await withTaskGroup(of: (String, Result<Snapshot, Error>).self) { group in
             for s in list {
-                group.addTask { [client] in (s.id, try? await client.snapshot(s)) }
+                group.addTask { [client] in
+                    do { return (s.id, .success(try await client.snapshot(s))) } catch { return (s.id, .failure(error)) }
+                }
             }
-            var out: [String: Snapshot] = [:]
-            for await (id, snap) in group { out[id] = snap }
+            var out: [String: Result<Snapshot, Error>] = [:]
+            for await (id, r) in group { out[id] = r }
             return out
         }
-        for (id, snap) in snaps {
+        for (id, r) in results {
             guard var st = statuses[id] else { continue }
-            st.snapshot = snap
-            st.lastSeen = now
+            switch r {
+            case .success(let snap):
+                st.snapshot = snap
+                st.lastSeen = now
+                st.error = nil
+            case .failure(let error):
+                st.error = Poller.describe(error)
+            }
             statuses[id] = st
+            track(id, now: now)
         }
         let fresh = Set(statuses.filter { $0.value.error == nil && $0.value.snapshot != nil }.keys)
         _ = await evaluateSites(fresh: fresh, macOffline: false, alerts: false, now: now)
@@ -177,6 +196,47 @@ public actor Poller {
     public func stop() {
         task?.cancel()
         task = nil
+    }
+
+    /// The server was told to reboot: show it as rebooting, not as fine or
+    /// down, until it answers with a newer boot time or the grace runs out.
+    public func markRebooting(_ serverID: String, now: Date = Date()) {
+        rebooting[serverID] = now
+        if var st = statuses[serverID] {
+            st.alerts = alerts(for: st, now: now)
+            statuses[serverID] = st
+        }
+        publish()
+    }
+
+    /// Updates the failure and reboot bookkeeping for one server after a poll
+    /// and recomputes the alerts it shows.
+    private func track(_ id: String, now: Date) {
+        guard var st = statuses[id] else { return }
+        if st.error == nil {
+            failingSince[id] = nil
+        } else if failingSince[id] == nil {
+            failingSince[id] = now
+        }
+        if let since = rebooting[id] {
+            let rebooted = st.error == nil && (st.snapshot?.bootTime ?? .distantPast) > since.addingTimeInterval(-60)
+            if rebooted || now.timeIntervalSince(since) > Poller.rebootGrace { rebooting[id] = nil }
+        }
+        st.alerts = alerts(for: st, now: now)
+        statuses[id] = st
+    }
+
+    /// The engine's alerts plus what the screens must show before any alert
+    /// fires: a server that does not answer is never "в норме".
+    private func alerts(for st: ServerStatus, now: Date) -> [ActiveAlert] {
+        var list = engine.active(st.id)
+        if let since = rebooting[st.id] {
+            list.append(ActiveAlert(key: "rebooting", severity: .warning, message: "перезагружается", since: since))
+        } else if let err = st.error, !macOffline, !list.contains(where: { $0.key == "down" }) {
+            list.append(ActiveAlert(key: "noreply", severity: .warning, message: "нет ответа: \(err)",
+                                    since: failingSince[st.id] ?? now))
+        }
+        return list
     }
 
     /// What one agent probes: the sites it checks, and every other server's
@@ -212,13 +272,16 @@ public actor Poller {
         // woke up): don't count it against the servers or raise alerts.
         let macOffline = !results.isEmpty && results.allSatisfy { $0.1.snapshot == nil }
             && (results.count >= 2 || results.allSatisfy { $0.1.offline })
+        self.macOffline = macOffline
 
         var events: [AlertEvent] = []
         for (s, r) in results {
             if let pushed = r.pushed { pushedTargets[s.id] = pushed }
             if !macOffline { try? await store.addPoll(s.id, at: now, ok: r.snapshot != nil, error: r.error) }
             let outcome: PollOutcome = r.snapshot.map { .snapshot($0) } ?? .failure(r.error ?? "нет ответа")
-            if !macOffline {
+            // A server rebooting on request is expected to be silent for a while.
+            let expectedSilence = r.snapshot == nil && rebooting[s.id] != nil
+            if !macOffline && !expectedSilence {
                 let ev = engine.process(server: s, outcome: outcome, now: now)
                 events += ev
                 for e in ev { try? await store.addEvent(e) }
@@ -230,8 +293,8 @@ public actor Poller {
                 st.lastSeen = now
             }
             st.error = r.error
-            st.alerts = engine.active(s.id)
             statuses[s.id] = st
+            track(s.id, now: now)
         }
         // Backfilled history can reach back hours: roll up from its oldest sample.
         let oldest = results.compactMap(\.1.oldestNew).min() ?? now
