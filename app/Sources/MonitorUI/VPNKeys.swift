@@ -20,6 +20,8 @@ struct NewVPNKeySheet: View {
     @State private var busy = false
     @State private var error: String?
     @State private var result: AWGNewClient?
+    /// Which QR the result shows: the AmneziaVPN link or the .conf text.
+    @State private var qrForApp = true
 
     private var cleanName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -29,7 +31,7 @@ struct NewVPNKeySheet: View {
             Divider()
             buttons
         }
-        .frame(width: 460)
+        .frame(width: result?.amneziaLink == nil ? 460 : 600)
         .onDisappear { if let r = result { cleanup(r) } }
     }
 
@@ -66,15 +68,27 @@ struct NewVPNKeySheet: View {
     private func done(_ r: AWGNewClient) -> some View {
         VStack(spacing: 14) {
             Text("Ключ «\(r.client.name)» создан").font(.headline)
-            if let qr = QRCode.image(r.config) {
+            if r.amneziaLink != nil {
+                Picker("QR", selection: $qrForApp) {
+                    Text("QR для AmneziaVPN").tag(true)
+                    Text("QR файла .conf").tag(false)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+            }
+            let showLink = qrForApp && r.amneziaLink != nil
+            // The vpn:// link is a few KB, so its QR is denser: low error
+            // correction and a bigger picture keep it scannable.
+            if let qr = showLink ? QRCode.image(r.amneziaLink ?? "", correction: "L") : QRCode.image(r.config) {
                 Image(nsImage: qr)
                     .interpolation(.none)
                     .resizable()
-                    .frame(width: 240, height: 240)
+                    .frame(width: showLink ? 320 : 240, height: showLink ? 320 : 240)
                     .padding(8)
                     .background(.white, in: RoundedRectangle(cornerRadius: 6))
             }
-            Text("Отсканируйте в AmneziaVPN или AmneziaWG на телефоне, или сохраните файл .conf и импортируйте его.")
+            Text(showLink
+                 ? "В приложении AmneziaVPN: Добавить сервер → Вставить ключ (или отсканируйте QR)."
+                 : "Отсканируйте в AmneziaVPN или AmneziaWG на телефоне, или сохраните файл .conf и импортируйте его.")
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             if let a = r.client.address {
@@ -92,7 +106,13 @@ struct NewVPNKeySheet: View {
                 ShareLink(item: tempFile(r), preview: SharePreview(r.fileName)) {
                     Label("Отправить", systemImage: "square.and.arrow.up")
                 }
-                Button("Скопировать") {
+                if let link = r.amneziaLink {
+                    Button("Скопировать ссылку vpn://") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(link, forType: .string)
+                    }
+                }
+                Button(r.amneziaLink == nil ? "Скопировать" : "Скопировать .conf") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(r.config, forType: .string)
                 }
@@ -161,10 +181,10 @@ struct NewVPNKeySheet: View {
 
 enum QRCode {
     /// A crisp QR image; scale up with `.interpolation(.none)`.
-    static func image(_ text: String) -> NSImage? {
+    static func image(_ text: String, correction: String = "M") -> NSImage? {
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(text.utf8)
-        filter.correctionLevel = "M"
+        filter.correctionLevel = correction
         guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)) else { return nil }
         let rep = NSCIImageRep(ciImage: output)
         let image = NSImage(size: rep.size)
