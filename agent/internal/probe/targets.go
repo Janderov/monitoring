@@ -219,7 +219,8 @@ func probeHTTP(ctx context.Context, t Target) collect.Check {
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 
 	c.StatusCode = resp.StatusCode
-	c.OK = resp.StatusCode < 400
+	// 401/403: the site is up and asks for a login.
+	c.OK = resp.StatusCode < 400 || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden
 	if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
 		exp := resp.TLS.PeerCertificates[0].NotAfter.UTC()
 		c.TLSExpiry = &exp

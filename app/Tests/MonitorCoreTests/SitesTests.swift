@@ -57,6 +57,22 @@ final class SitesTests: XCTestCase {
                           domainError: nil, alerts: [])
     }
 
+    func testPasswordProtectedSiteIsUp() throws {
+        // Older agents report 401/403 as a failure.
+        let json = #"""
+        [{"id":"site-a","kind":"http","target":"https://a.example.com","ok":false,"status_code":401,
+          "latency_ms":120,"error":"401 Unauthorized"},
+         {"id":"site-b","kind":"http","target":"https://b.example.com","ok":false,"status_code":502,
+          "latency_ms":80,"error":"502 Bad Gateway"}]
+        """#
+        let checks = try AgentJSON.decoder.decode([Snapshot.Check].self, from: Data(json.utf8))
+        XCTAssertTrue(checks[0].ok)
+        XCTAssertNil(checks[0].error)
+        XCTAssertEqual(checks[0].statusCode, 401)
+        XCTAssertFalse(checks[1].ok)
+        XCTAssertEqual(checks[1].error, "502 Bad Gateway")
+    }
+
     func testSiteRules() {
         XCTAssertTrue(SiteRules.conditions(status([check(ok: true), check(ok: true)]), now: now).isEmpty)
 
