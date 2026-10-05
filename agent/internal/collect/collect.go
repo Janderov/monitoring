@@ -83,6 +83,9 @@ type Container struct {
 	Image  string `json:"image"`
 	State  string `json:"state"`
 	Status string `json:"status"`
+	// Health is the Docker healthcheck result: "healthy", "unhealthy",
+	// "starting", or empty when the container has no healthcheck.
+	Health string `json:"health,omitempty"`
 }
 
 // ContainerLister is implemented by the docker package; nil disables it.
@@ -307,7 +310,9 @@ func skipIface(name string) bool {
 	if name == "lo" {
 		return true
 	}
-	for _, p := range []string{"docker", "br-", "veth", "virbr", "tun", "wg", "awg"} {
+	// amn* is AmneziaWG's host-side interface when the container runs with
+	// host networking (seen on a real server as amn0).
+	for _, p := range []string{"docker", "br-", "veth", "virbr", "tun", "wg", "awg", "amn"} {
 		if strings.HasPrefix(name, p) {
 			return true
 		}

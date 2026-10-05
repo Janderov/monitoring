@@ -137,7 +137,7 @@ func TestMissingFilesAreReportedNotFatal(t *testing.T) {
 func TestSkipIface(t *testing.T) {
 	for name, want := range map[string]bool{
 		"lo": true, "eth0": false, "ens3": false, "docker0": true, "br-1a2b": true,
-		"veth12": true, "wg0": true, "awg0": true, "tun0": true, "local1": false,
+		"veth12": true, "wg0": true, "awg0": true, "amn0": true, "tun0": true, "local1": false,
 	} {
 		if got := skipIface(name); got != want {
 			t.Errorf("skipIface(%q) = %v, want %v", name, got, want)

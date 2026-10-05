@@ -1,3 +1,4 @@
 agent/monitor-agent
 *.test
 .DS_Store
+agent/dist/

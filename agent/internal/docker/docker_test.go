@@ -31,3 +31,17 @@ func TestListOverUnixSocket(t *testing.T) {
 		t.Errorf("containers = %+v", got)
 	}
 }
+
+func TestHealth(t *testing.T) {
+	for status, want := range map[string]string{
+		"Up 2 weeks (healthy)":            "healthy",
+		"Up 1 minute (unhealthy)":         "unhealthy",
+		"Up 5 seconds (health: starting)": "starting",
+		"Up 5 days":                       "",
+		"Exited (1) 3 hours ago":          "",
+	} {
+		if got := health(status); got != want {
+			t.Errorf("health(%q) = %q, want %q", status, got, want)
+		}
+	}
+}

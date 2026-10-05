@@ -29,13 +29,23 @@ var Known = []ServiceSpec{
 
 // Detect returns the known services that are present on this host right now
 // (process running or port open). Used once at install time.
+//
+// The port is kept only if it answers now: a database in a Docker container
+// usually has no published port, and checking it would report a healthy
+// database as down. Such databases are watched by process (and by their
+// container's state and healthcheck).
 func Detect(procRoot string) []ServiceSpec {
 	running := processNames(procRoot)
 	var out []ServiceSpec
 	for _, s := range Known {
-		if anyRunning(running, s.Processes) || portOpen(s.Port, time.Second) {
-			out = append(out, s)
+		open := portOpen(s.Port, time.Second)
+		if !anyRunning(running, s.Processes) && !open {
+			continue
 		}
+		if !open {
+			s.Port = 0
+		}
+		out = append(out, s)
 	}
 	return out
 }

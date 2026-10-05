@@ -64,6 +64,7 @@ func (c *Client) fillWireGuard(v *collect.VPN, now time.Time) {
 	}
 
 	v.Peers = peers
+	v.ClientsKnown = true
 	v.Clients = len(peers)
 	for _, p := range peers {
 		if p.Active {

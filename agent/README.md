@@ -20,15 +20,23 @@ go test ./...
 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=0.1.0" -o monitor-agent ./cmd/monitor-agent
 ```
 
-## Установка на сервер (пока вручную)
+## Установка на сервер
+
+Агент ставится с Mac по SSH: репозиторий приватный, поэтому серверы ничего не скачивают сами.
+Позже это будет делать кнопка «Добавить сервер» в приложении, а пока так:
 
 ```
-scp monitor-agent deploy/install.sh deploy/monitor-agent.service root@SERVER:/tmp/
-ssh root@SERVER 'cd /tmp && ./install.sh --binary ./monitor-agent --token <ключ> --host <IP сервера>'
+agent/scripts/dist.sh                         # собрать бандл в agent/dist (нужен Go)
+agent/scripts/remote-install.sh root@SERVER   # или: -p 2222 -i ~/.ssh/key user@SERVER
 ```
 
-Ключ генерирует приложение на Mac (до его появления подойдёт `openssl rand -hex 32`).
-Скрипт печатает отпечаток сертификата, его нужно сохранить в приложении. Порт по умолчанию 9443.
+Скрипт копирует бандл на сервер по одному SSH-соединению (пароль спросят один раз), проверяет
+контрольные суммы и ставит службу systemd. Для пользователя не root нужен `sudo`. В конце он печатает
+ключ и отпечаток сертификата, их нужно сохранить в приложении. Повторный запуск обновляет агента
+и сохраняет прежний ключ.
+
+Бандл без Go можно взять из GitHub Actions (артефакт `monitor-agent-dist` у любой сборки main)
+или из релиза: тег `vX.Y.Z` публикует его как релиз репозитория.
 
 ## API
 
