@@ -3,59 +3,139 @@ import AppKit
 import MonitorCore
 import SwiftUI
 
-/// Owns the poller and turns its callbacks into UI state. Notifications are
-/// delivered through `notify` so this module stays free of UserNotifications.
+/// UI state over a `MonitorBackend`. Screens read from here and never talk to
+/// the poller or the database directly.
 @MainActor
 public final class AppModel: ObservableObject {
     @Published public private(set) var statuses: [ServerStatus] = []
     @Published public private(set) var configError: String?
+    /// Time of the last finished polling round, for "опрос 12 с назад".
+    @Published public private(set) var lastRound: Date?
 
-    public private(set) var store: Store?
-    private var poller: Poller?
-    private let notify: @Sendable ([AlertEvent]) -> Void
+    /// Navigation shared by the main window and the menu bar ("open this server").
+    @Published public var section: AppSection = .overview
+    @Published public var selectedServerID: String?
+    @Published public var selectedSiteID: String?
+    /// Sidebar filter by group or tag; nil shows everything.
+    @Published public var filter: Filter?
+
+    public let backend: MonitorBackend
+    public let locations: ServerLocations
 
     public var overall: ServerStatus.Level {
         if configError != nil { return .warning }
         return statuses.map(\.level).max() ?? .unknown
     }
 
-    public init(notify: @escaping @Sendable ([AlertEvent]) -> Void) {
-        self.notify = notify
+    /// Problems across all servers, worst and oldest first.
+    public var problems: [Problem] {
+        statuses.flatMap { s in s.alerts.map { Problem(status: s, alert: $0) } }
+            .sorted { ($0.alert.severity, $1.alert.since) > ($1.alert.severity, $0.alert.since) }
+    }
+
+    public convenience init(notify: @escaping @Sendable ([AlertEvent]) -> Void) {
+        self.init(backend: LocalBackend(notify: notify))
+    }
+
+    public init(backend: MonitorBackend) {
+        self.backend = backend
+        self.locations = ServerLocations()
         Task { await start() }
     }
 
     private func start() async {
         do {
-            try DataFolder.prepare()
-            let store = try Store(path: DataFolder.database.path)
-            let poller = Poller(
-                client: AgentClient(transport: PinnedTransport()), store: store,
-                // The model lives as long as the app, so unowned is safe here.
-                onUpdate: { [unowned self] list in Task { @MainActor in self.statuses = list } },
-                onEvents: notify)
-            self.store = store
-            self.poller = poller
-            await reload()
-            await poller.start()
+            // The model lives as long as the app, so unowned is safe here.
+            try await backend.start { [unowned self] list in
+                Task { @MainActor in
+                    self.statuses = list
+                    self.lastRound = Date()
+                }
+            }
         } catch {
-            configError = "Не удалось открыть данные: \(error)"
+            configError = "Не удалось открыть данные: \(describe(error))"
+            return
         }
+        await reload()
     }
 
     /// Re-reads servers.json and polls right away.
     public func reload() async {
-        guard let poller else { return }
         do {
-            let file = try ServersFile.load(from: DataFolder.serversFile)
+            try await backend.reload()
             configError = nil
-            await poller.setServers(file.servers)
-            await poller.pollAll(now: Date())
         } catch {
-            configError = "servers.json: \(error)"
+            configError = "servers.json: \(describe(error))"
         }
+    }
+
+    public func pollNow() async { await backend.pollNow() }
+
+    /// Single permission check for every action. There is one user (the
+    /// owner) today, so everything is allowed; roles plug in here later.
+    public func can(_ action: UserAction, _ server: ServerConfig? = nil) -> Bool { true }
+
+    public func status(_ id: String) -> ServerStatus? { statuses.first { $0.id == id } }
+
+    // MARK: Actions
+
+    /// Opens Terminal with an SSH session (Terminal handles ssh:// links).
+    public func openSSH(_ server: ServerConfig) {
+        guard can(.ssh, server) else { return }
+        let user = UserDefaults.standard.string(forKey: "sshUser.\(server.id)")
+            ?? UserDefaults.standard.string(forKey: "sshUser.default") ?? "root"
+        var c = URLComponents()
+        c.scheme = "ssh"
+        c.user = user
+        c.host = server.host
+        if let url = c.url { NSWorkspace.shared.open(url) }
+    }
+
+    public func copyAddress(_ server: ServerConfig) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(server.host, forType: .string)
     }
 
     public func openConfig() { NSWorkspace.shared.open(DataFolder.serversFile) }
     public func openDataFolder() { NSWorkspace.shared.open(DataFolder.url) }
+
+    private func describe(_ error: Error) -> String { String(describing: error) }
+}
+
+public enum AppSection: Hashable, Sendable {
+    case overview, map, problems, servers, sites, vpn, journal
+}
+
+public enum Filter: Hashable, Sendable {
+    case group(String), tag(String)
+
+    func matches(_ s: ServerConfig) -> Bool {
+        switch self {
+        case .group(let g): return s.group == g
+        case .tag(let t): return s.tags?.contains(t) == true
+        }
+    }
+}
+
+extension AppModel {
+    /// Statuses after the sidebar filter.
+    public var visible: [ServerStatus] {
+        guard let filter else { return statuses }
+        return statuses.filter { filter.matches($0.server) }
+    }
+
+    public var groups: [String] { Array(Set(statuses.compactMap(\.server.group))).sorted() }
+    public var tags: [String] { Array(Set(statuses.flatMap { $0.server.tags ?? [] })).sorted() }
+
+    public func show(server id: String) {
+        section = .servers
+        selectedServerID = id
+    }
+}
+
+public struct Problem: Identifiable, Sendable {
+    public var status: ServerStatus
+    public var alert: ActiveAlert
+    public var id: String { "\(status.id)|\(alert.key)" }
 }
 #endif
