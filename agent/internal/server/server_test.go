@@ -4,18 +4,34 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Janderov/monitoring/agent/internal/buffer"
 	"github.com/Janderov/monitoring/agent/internal/collect"
+	"github.com/Janderov/monitoring/agent/internal/probe"
 )
+
+func store(t *testing.T) *probe.Store {
+	t.Helper()
+	s, err := probe.OpenStore(filepath.Join(t.TempDir(), "checks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
 
 const token = "0123456789abcdef0123456789abcdef"
 
 func do(t *testing.T, h http.Handler, path, auth string) *httptest.ResponseRecorder {
+	return doMethod(t, h, http.MethodGet, path, auth, "")
+}
+
+func doMethod(t *testing.T, h http.Handler, method, path, auth, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if auth != "" {
 		req.Header.Set("Authorization", auth)
 	}
@@ -25,7 +41,7 @@ func do(t *testing.T, h http.Handler, path, auth string) *httptest.ResponseRecor
 }
 
 func TestAuthRequired(t *testing.T) {
-	h := New(token, buffer.New(5), "test").Handler()
+	h := New(token, buffer.New(5), store(t), "test").Handler()
 	for _, auth := range []string{"", "Bearer wrong", "Basic " + token, token, "Bearer " + token + "x"} {
 		if rec := do(t, h, "/v1/health", auth); rec.Code != http.StatusUnauthorized {
 			t.Errorf("auth %q: status %d, want 401", auth, rec.Code)
@@ -42,7 +58,7 @@ func TestAuthRequired(t *testing.T) {
 
 func TestSnapshotAndHistory(t *testing.T) {
 	ring := buffer.New(1000)
-	h := New(token, ring, "test").Handler()
+	h := New(token, ring, store(t), "test").Handler()
 	auth := "Bearer " + token
 
 	if rec := do(t, h, "/v1/snapshot", auth); rec.Code != http.StatusServiceUnavailable {
@@ -88,3 +104,32 @@ func TestSnapshotAndHistory(t *testing.T) {
 }
 
 func itoa(v int64) string { b, _ := json.Marshal(v); return string(b) }
+
+func TestChecksEndpoints(t *testing.T) {
+	h := New(token, buffer.New(5), store(t), "test").Handler()
+	auth := "Bearer " + token
+
+	if rec := doMethod(t, h, http.MethodPut, "/v1/checks", "", `{"targets":[]}`); rec.Code != http.StatusUnauthorized {
+		t.Errorf("PUT without token: %d, want 401", rec.Code)
+	}
+	good := `{"targets":[{"id":"site","kind":"http","url":"https://example.com"},{"id":"nl","kind":"tcp","host":"203.0.113.7","port":22}]}`
+	if rec := doMethod(t, h, http.MethodPut, "/v1/checks", auth, good); rec.Code != http.StatusOK {
+		t.Fatalf("PUT good: %d %s", rec.Code, rec.Body)
+	}
+	for name, body := range map[string]string{
+		"bad kind":      `{"targets":[{"id":"x","kind":"icmp","host":"a"}]}`,
+		"bad url":       `{"targets":[{"id":"x","kind":"http","url":"ftp://a"}]}`,
+		"duplicate id":  `{"targets":[{"id":"x","kind":"tcp","host":"a","port":1},{"id":"x","kind":"tcp","host":"b","port":1}]}`,
+		"unknown field": `{"targets":[],"extra":1}`,
+		"not json":      `nope`,
+	} {
+		if rec := doMethod(t, h, http.MethodPut, "/v1/checks", auth, body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", name, rec.Code)
+		}
+	}
+	var got struct{ Targets []probe.Target }
+	json.Unmarshal(do(t, h, "/v1/checks", auth).Body.Bytes(), &got)
+	if len(got.Targets) != 2 || got.Targets[1].Port != 22 {
+		t.Errorf("GET after bad PUTs = %+v, want the 2 good targets", got.Targets)
+	}
+}

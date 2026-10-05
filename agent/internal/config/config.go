@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Janderov/monitoring/agent/internal/probe"
 )
 
 // DefaultPath is where the installer puts the configuration.
@@ -32,6 +34,11 @@ type Config struct {
 	ProcRoot string `json:"proc_root"`
 	// DockerSocket is the Docker Engine API socket; empty disables Docker.
 	DockerSocket string `json:"docker_socket"`
+	// StateDir holds data the agent writes, such as the check list from the Mac.
+	StateDir string `json:"state_dir"`
+	// Services are local daemons to watch. Absent (null) means detect the
+	// known ones (PostgreSQL, MySQL) when the agent starts; [] means none.
+	Services []probe.ServiceSpec `json:"services"`
 }
 
 // Duration wraps time.Duration so it reads and writes as "60s" in JSON.
@@ -62,6 +69,7 @@ func Default(dir string) Config {
 		BufferSize:   1440,
 		ProcRoot:     "/proc",
 		DockerSocket: "/var/run/docker.sock",
+		StateDir:     "/var/lib/monitor-agent",
 	}
 }
 

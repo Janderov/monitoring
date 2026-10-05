@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Janderov/monitoring/agent/internal/buffer"
+	"github.com/Janderov/monitoring/agent/internal/probe"
 )
 
 // maxHistory caps one /v1/history response; the Mac pages with ?since=.
@@ -18,12 +19,13 @@ const maxHistory = 500
 type Server struct {
 	token   []byte
 	ring    *buffer.Ring
+	checks  *probe.Store
 	version string
 	started time.Time
 }
 
-func New(token string, ring *buffer.Ring, version string) *Server {
-	return &Server{token: []byte(token), ring: ring, version: version, started: time.Now()}
+func New(token string, ring *buffer.Ring, checks *probe.Store, version string) *Server {
+	return &Server{token: []byte(token), ring: ring, checks: checks, version: version, started: time.Now()}
 }
 
 // Handler returns the API routes, all behind token authentication.
@@ -32,6 +34,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/health", s.health)
 	mux.HandleFunc("GET /v1/snapshot", s.snapshot)
 	mux.HandleFunc("GET /v1/history", s.history)
+	mux.HandleFunc("GET /v1/checks", s.getChecks)
+	mux.HandleFunc("PUT /v1/checks", s.putChecks)
 	return s.auth(mux)
 }
 
@@ -82,6 +86,31 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		items = items[:maxHistory]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"snapshots": items, "more": more})
+}
+
+type checksBody struct {
+	Targets []probe.Target `json:"targets"`
+}
+
+func (s *Server) getChecks(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, checksBody{Targets: s.checks.Get()})
+}
+
+// putChecks replaces the list of sites and servers this agent probes. Results
+// appear in the "checks" field of the next snapshots.
+func (s *Server) putChecks(w http.ResponseWriter, r *http.Request) {
+	var body checksBody
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if err := s.checks.Set(body.Targets); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, checksBody{Targets: s.checks.Get()})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

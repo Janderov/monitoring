@@ -11,6 +11,9 @@ Group=monitor-agent
 ExecStart=/usr/local/bin/monitor-agent run -config /etc/monitor-agent/config.json
 Restart=always
 RestartSec=5
+# /var/lib/monitor-agent: the list of sites and servers to probe, set from the Mac.
+StateDirectory=monitor-agent
+StateDirectoryMode=0700
 
 # The agent only reads system state; lock everything else down.
 NoNewPrivileges=yes
