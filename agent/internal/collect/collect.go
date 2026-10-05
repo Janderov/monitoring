@@ -30,7 +30,11 @@ type Snapshot struct {
 	Services      []Service   `json:"services,omitempty"`
 	Checks        []Check     `json:"checks,omitempty"`
 	Links         []Link      `json:"links,omitempty"`
-	Errors        []string    `json:"errors,omitempty"`
+	// Forwards: client traffic this server passes on (NAT), by real destination.
+	Forwards []Link `json:"forwards,omitempty"`
+	// Inbound: connections from public addresses to this server, by source.
+	Inbound []Link   `json:"inbound,omitempty"`
+	Errors  []string `json:"errors,omitempty"`
 }
 
 type CPU struct {

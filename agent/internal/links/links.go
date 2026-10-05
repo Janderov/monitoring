@@ -62,7 +62,7 @@ func Collect(sources []Source, ignorePorts map[int]bool) []collect.Link {
 			if !isConnected(s) || listening[fmt.Sprintf("%s/%d", s.proto, s.localPort)] {
 				continue
 			}
-			if !isPublic(s.remote) || ignorePorts[s.remotePort] {
+			if !IsPublic(s.remote) || ignorePorts[s.remotePort] {
 				continue
 			}
 			// Host-network containers share the host's sockets; count each once.
@@ -119,7 +119,8 @@ func isListening(s socket) bool {
 
 func isConnected(s socket) bool { return s.state == stateEstablished && !s.remote.IsUnspecified() }
 
-func isPublic(ip net.IP) bool {
+// IsPublic reports whether ip is a routable internet address.
+func IsPublic(ip net.IP) bool {
 	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
 		ip.IsMulticast() {
 		return false

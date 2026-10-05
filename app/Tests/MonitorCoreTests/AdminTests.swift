@@ -192,7 +192,7 @@ final class AgentInstallerTests: XCTestCase {
         bundle = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
         for f in ["monitor-agent-linux-amd64", "monitor-agent-linux-arm64", "monitor-agent.service",
-                  "install.sh", "SHA256SUMS"] {
+                  "monitor-agent-flows.service", "install.sh", "SHA256SUMS"] {
             try Data("x".utf8).write(to: bundle.appendingPathComponent(f))
         }
     }
@@ -213,7 +213,8 @@ final class AgentInstallerTests: XCTestCase {
         XCTAssertFalse(r.upgraded)
         XCTAssertTrue(r.firewallOpened)
         XCTAssertTrue(r.verified)
-        XCTAssertEqual(ssh.uploads, ["monitor-agent-linux-amd64", "monitor-agent.service", "install.sh", "SHA256SUMS"])
+        XCTAssertEqual(ssh.uploads, ["monitor-agent-linux-amd64", "monitor-agent.service",
+                                     "monitor-agent-flows.service", "install.sh", "SHA256SUMS"])
         // Root needs no sudo; the temp dir is cleaned up in the same command.
         let install = ssh.commands.first { $0.contains("install.sh") }!
         XCTAssertTrue(install.hasPrefix("bash /tmp/monitor-agent-install.Ab12/install.sh"), install)

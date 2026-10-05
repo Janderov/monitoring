@@ -17,11 +17,11 @@ for arch in amd64 arm64; do
     -ldflags "-s -w -X main.version=$VERSION" \
     -o "$OUT/monitor-agent-linux-$arch" ./cmd/monitor-agent
 done
-cp deploy/install.sh deploy/monitor-agent.service "$OUT/"
+cp deploy/install.sh deploy/monitor-agent.service deploy/monitor-agent-flows.service "$OUT/"
 
 # sha256sum on Linux, shasum on macOS; both print "<hash>  <file>".
 if command -v sha256sum >/dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi
-(cd "$OUT" && "${sum[@]}" monitor-agent-linux-* monitor-agent.service install.sh > SHA256SUMS)
+(cd "$OUT" && "${sum[@]}" monitor-agent-linux-* monitor-agent.service monitor-agent-flows.service install.sh > SHA256SUMS)
 
 echo "built $VERSION into agent/$OUT:"
 ls -l "$OUT"
