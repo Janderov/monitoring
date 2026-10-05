@@ -162,8 +162,7 @@ public struct MenuBarContent: View {
             MenuButton(title: "Открыть окно", shortcut: "⌘0") { openMain() }
             MenuButton(title: "Настройки…", shortcut: "⌘,") {
                 NSApp.activate(ignoringOtherApps: true)
-                // The SwiftUI Settings scene answers this action (openSettings needs a newer SDK).
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                openWindow(id: SettingsView.id)
             }
             MenuButton(title: "Выйти", shortcut: "⌘Q") { NSApp.terminate(nil) }
         }

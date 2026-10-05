@@ -130,6 +130,9 @@ public struct Snapshot: Codable, Equatable, Sendable {
         public var latencyMs: Double
         public var tlsExpiry: Date?
         public var error: String?
+
+        /// HTTP answers that mean the site is up but asks for a login.
+        public static let authStatuses: Set<Int> = [401, 403]
     }
 
     /// Highest used percentage over all disks, 0 when none are reported.
@@ -191,5 +194,24 @@ public enum AgentJSON {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.string(from: date)
+    }
+}
+
+extension Snapshot.Check {
+    /// Older agents count 401/403 as a failure; a site behind a password is up.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(String.self, forKey: .kind)
+        target = try c.decode(String.self, forKey: .target)
+        ok = try c.decode(Bool.self, forKey: .ok)
+        statusCode = try c.decodeIfPresent(Int.self, forKey: .statusCode)
+        latencyMs = try c.decode(Double.self, forKey: .latencyMs)
+        tlsExpiry = try c.decodeIfPresent(Date.self, forKey: .tlsExpiry)
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+        if !ok, let code = statusCode, Self.authStatuses.contains(code) {
+            ok = true
+            error = nil
+        }
     }
 }
