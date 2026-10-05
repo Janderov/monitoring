@@ -25,6 +25,10 @@ type Snapshot struct {
 	Disks         []Disk      `json:"disks"`
 	Network       Network     `json:"network"`
 	Containers    []Container `json:"containers,omitempty"`
+	Processes     []Process   `json:"processes,omitempty"`
+	VPN           []VPN       `json:"vpn,omitempty"`
+	Services      []Service   `json:"services,omitempty"`
+	Checks        []Check     `json:"checks,omitempty"`
 	Errors        []string    `json:"errors,omitempty"`
 }
 
@@ -91,10 +95,11 @@ type Collector struct {
 	procRoot string
 	docker   ContainerLister
 
-	mu       sync.Mutex
-	prevCPU  cpuTimes
-	prevNet  Network
-	prevTime time.Time
+	mu        sync.Mutex
+	prevCPU   cpuTimes
+	prevNet   Network
+	prevTime  time.Time
+	prevProcs map[int]procTicks
 }
 
 func New(procRoot string, docker ContainerLister) *Collector {
@@ -154,6 +159,14 @@ func (c *Collector) Sample(now time.Time) Snapshot {
 		}
 		s.Network = n
 		c.prevNet = n
+	}
+	if ps, cur, err := readProcesses(c.procRoot, c.prevProcs, now.Sub(c.prevTime).Seconds(), topProcesses); err != nil {
+		fail("processes", err)
+	} else {
+		if !c.prevTime.IsZero() {
+			s.Processes = ps
+		}
+		c.prevProcs = cur
 	}
 	c.prevTime = now
 
