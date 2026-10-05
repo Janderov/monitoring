@@ -94,18 +94,48 @@ struct ExternalPin: Identifiable {
 }
 
 /// Owners of unknown addresses, looked up over RDAP as they appear.
+/// Lookups run in the background and are not restarted when the map
+/// redraws, so a long list (every VPN client) gets through in the end.
 @MainActor
 final class ExternalOwners: ObservableObject {
     @Published private(set) var owners: [String: IPOwner] = [:]
     private let lookup: IPLookup
+    private var queue: [String] = []
+    private var queued = Set<String>()
+    private var failedAt: [String: Date] = [:]
+    private var worker: Task<Void, Never>?
 
     init(lookup: IPLookup) { self.lookup = lookup }
 
-    func resolve(_ ips: [String]) async {
-        for ip in ips where owners[ip] == nil {
-            if Task.isCancelled { return }
-            if let o = await lookup.owner(of: ip) { owners[ip] = o }
+    /// Queues addresses not known yet; `first` jumps ahead of the queue.
+    func request(_ ips: [String], first: Bool = false) {
+        let fresh = ips.filter { ip in
+            owners[ip] == nil && !queued.contains(ip)
+                && (failedAt[ip].map { Date().timeIntervalSince($0) > 600 } ?? true)
         }
+        guard !fresh.isEmpty else { return }
+        queued.formUnion(fresh)
+        queue = first ? fresh + queue : queue + fresh
+        if worker == nil { worker = Task { await drain() } }
+    }
+
+    private func drain() async {
+        while !queue.isEmpty {
+            let batch = Array(queue.prefix(4))
+            queue.removeFirst(batch.count)
+            let lookup = lookup
+            let found = await withTaskGroup(of: (String, IPOwner?).self) { group in
+                for ip in batch { group.addTask { (ip, await lookup.owner(of: ip)) } }
+                var out: [(String, IPOwner?)] = []
+                for await r in group { out.append(r) }
+                return out
+            }
+            for (ip, owner) in found {
+                queued.remove(ip)
+                if let owner { owners[ip] = owner } else { failedAt[ip] = Date() }
+            }
+        }
+        worker = nil
     }
 }
 

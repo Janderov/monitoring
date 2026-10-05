@@ -15,11 +15,12 @@ struct VPNClientSpot: Hashable, Identifiable {
     var ip: String
     var active: Bool
     var lastSeen: Date?
+    /// The key this Mac itself is connected with.
+    var thisMac = false
 
-    var title: String { name ?? "ключ \(publicKey.prefix(6))…" }
+    var title: String { (name ?? "ключ \(publicKey.prefix(6))…") + (thisMac ? " (этот Mac)" : "") }
 
-    /// Peers with an endpoint, except cascades (0.0.0.0/0 to another server)
-    /// and this Mac's own tunnel, which the map already draws.
+    /// Peers with an endpoint, except cascades (0.0.0.0/0 to another server).
     @MainActor static func compute(_ model: AppModel) -> [VPNClientSpot] {
         let ours = Set(model.statuses.map(\.server.host))
         let mine = Set(model.mac.tunnelAddresses.map { $0 + "/32" })
@@ -28,10 +29,11 @@ struct VPNClientSpot: Hashable, Identifiable {
             for vpn in s.snapshot?.vpn ?? [] {
                 for p in vpn.peers ?? [] {
                     let allowed = (p.allowedIps ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                    guard !allowed.contains("0.0.0.0/0"), !allowed.contains(where: mine.contains),
+                    guard !allowed.contains("0.0.0.0/0"),
                           let ep = p.endpoint, let ip = host(of: ep), !ours.contains(ip) else { continue }
                     out.append(.init(serverID: s.id, container: vpn.container, name: p.name, publicKey: p.publicKey,
-                                     ip: ip, active: p.active, lastSeen: p.latestHandshake))
+                                     ip: ip, active: p.active, lastSeen: p.latestHandshake,
+                                     thisMac: p.active && allowed.contains(where: mine.contains)))
                 }
             }
         }
