@@ -11,6 +11,7 @@ struct MonitorApp: App {
     @StateObject private var model: AppModel
 
     init() {
+        SingleInstance.takeOver()
         let notifier = Notifier()
         notifier.requestPermission()
         self.notifier = notifier
@@ -34,6 +35,39 @@ struct MonitorApp: App {
             Image(nsImage: MenuBarIcon.image(for: model.overall))
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Only one copy runs: a newly launched build quits the older ones, so two
+/// apps never poll and write the same database, and an old build does not
+/// linger in memory. When this copy runs from Applications, a quit copy that
+/// ran from elsewhere (Downloads, a build folder) goes to the Trash, so it
+/// does not linger on disk either; the Trash keeps it recoverable.
+enum SingleInstance {
+    static func takeOver() {
+        guard let id = Bundle.main.bundleIdentifier else { return }
+        let me = ProcessInfo.processInfo.processIdentifier
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+            .filter { $0.processIdentifier != me }
+        guard !others.isEmpty else { return }
+        let ownPath = Bundle.main.bundleURL.standardizedFileURL.path
+        // Only when this copy is the installed one; a test copy launched from
+        // Downloads must never trash the one in Applications.
+        let installed = ownPath.hasPrefix("/Applications/")
+        let oldBundles = others.compactMap { $0.bundleURL?.standardizedFileURL }
+            .filter { installed && $0.path != ownPath && !$0.path.hasPrefix("/Applications/") }
+
+        others.forEach { $0.terminate() }
+        let deadline = Date().addingTimeInterval(3)
+        while others.contains(where: { !$0.isTerminated }), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        others.filter { !$0.isTerminated }.forEach { $0.forceTerminate() }
+
+        for url in Set(oldBundles) where url.pathExtension == "app"
+            && FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }
     }
 }
 

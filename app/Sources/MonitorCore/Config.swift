@@ -1,7 +1,8 @@
 import Foundation
 
-/// A server the Mac polls. Until the "Add server" screen exists these live in
-/// `servers.json` in the data folder.
+/// A server the Mac polls, as listed in `servers.json` in the data folder.
+/// The token is kept in Keychain and left out of the file (see
+/// `ConfigRepository`); a token still written in the file is accepted.
 public struct ServerConfig: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var name: String
@@ -25,6 +26,38 @@ public struct ServerConfig: Codable, Equatable, Identifiable, Sendable {
     }
 
     public var baseURL: URL { URL(string: "https://\(host):\(port)")! }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, host, port, token, fingerprint, group, tags, thresholds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        host = try c.decode(String.self, forKey: .host)
+        port = try c.decodeIfPresent(Int.self, forKey: .port) ?? 9443
+        token = try c.decodeIfPresent(String.self, forKey: .token) ?? ""
+        fingerprint = try c.decode(String.self, forKey: .fingerprint)
+        group = try c.decodeIfPresent(String.self, forKey: .group)
+        tags = try c.decodeIfPresent([String].self, forKey: .tags)
+        thresholds = try c.decodeIfPresent(Thresholds.self, forKey: .thresholds)
+    }
+
+    /// An empty token is omitted, which is how the file stores servers whose
+    /// token is in Keychain.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(host, forKey: .host)
+        try c.encode(port, forKey: .port)
+        if !token.isEmpty { try c.encode(token, forKey: .token) }
+        try c.encode(fingerprint, forKey: .fingerprint)
+        try c.encodeIfPresent(group, forKey: .group)
+        try c.encodeIfPresent(tags, forKey: .tags)
+        try c.encodeIfPresent(thresholds, forKey: .thresholds)
+    }
 }
 
 /// Fingerprints are compared as 32 raw bytes, so case and separators don't matter.
@@ -108,6 +141,10 @@ public struct ServersFile: Codable, Sendable {
             if s.token.hasPrefix("PASTE") || s.fingerprint.hasPrefix("PASTE") {
                 throw ConfigError("сервер \(s.id): это пример из файла, впишите свой IP, токен и отпечаток")
             }
+            if s.token.isEmpty {
+                throw ConfigError("сервер \(s.id): токена нет ни в файле, ни в Связке ключей, "
+                                  + "переустановите агента из приложения")
+            }
             guard s.token.count >= 32 else { throw ConfigError("сервер \(s.id): токен слишком короткий") }
             guard Fingerprint.bytes(s.fingerprint) != nil else {
                 throw ConfigError("сервер \(s.id): отпечаток должен состоять из 64 шестнадцатеричных символов "
@@ -131,21 +168,20 @@ public struct ServersFile: Codable, Sendable {
         }
     }
 
-    /// Written on first launch so there is something to edit.
+    /// Same key style as `decode`; servers whose token is empty (kept in
+    /// Keychain) are written without one.
+    public func encoded() throws -> Data {
+        let e = JSONEncoder()
+        e.keyEncodingStrategy = .convertToSnakeCase
+        e.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+        return try e.encode(self)
+    }
+
+    /// Written on first launch: servers and sites are added from the app.
     public static let example = """
     {
-      "servers": [
-        {
-          "id": "nl-1",
-          "name": "Нидерланды VPN",
-          "host": "203.0.113.10",
-          "port": 9443,
-          "token": "PASTE-TOKEN-FROM-remote-install.sh",
-          "fingerprint": "PASTE-FINGERPRINT-FROM-remote-install.sh",
-          "group": "Нидерланды",
-          "tags": ["vpn", "прод"]
-        }
-      ]
+      "servers": [],
+      "sites": []
     }
 
     """
