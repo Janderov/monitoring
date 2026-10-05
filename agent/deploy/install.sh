@@ -95,7 +95,9 @@ systemctl daemon-reload
 systemctl enable monitor-agent >/dev/null
 systemctl restart monitor-agent
 
-if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+# Only nag when the firewall is on and has no rule for the agent port yet.
+if command -v ufw >/dev/null && ufw status | grep -q "Status: active" \
+   && ! ufw status | grep -Eq "^${PORT}(/tcp)?[[:space:]]+ALLOW"; then
   echo "ufw is active: allow the agent port with 'ufw allow $PORT/tcp' (ideally only from your IP)"
 fi
 

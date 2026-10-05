@@ -26,8 +26,13 @@ jobs:
       - run: go vet ./...
       - run: GOOS=darwin go vet ./...
       - run: go test -race ./...
+      # Tags give release versions (v1.2.0); everything else is dev-<commit>.
       - name: build install bundle
-        run: scripts/dist.sh "${GITHUB_REF_NAME//\//-}"
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then v="$GITHUB_REF_NAME"; else v="dev-${HEAD_SHA::7}"; fi
+          scripts/dist.sh "$v"
       - uses: actions/upload-artifact@v4
         with:
           name: monitor-agent-dist
