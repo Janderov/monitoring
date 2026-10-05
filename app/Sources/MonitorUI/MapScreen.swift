@@ -131,7 +131,13 @@ struct MapScreen: View {
     private var layers: some View {
         VStack(alignment: .leading, spacing: 6) {
             Toggle("Связи и задержки", isOn: $showLinks)
+            if showLinks, model.links.isEmpty, model.statuses.count > 1 {
+                hint("Серверы пока не проверяют друг друга, поэтому линий нет.")
+            }
             Toggle("Маршруты VPN", isOn: $showRoutes)
+            if showRoutes, model.routes.isEmpty, let why = noRoutesReason {
+                hint(why)
+            }
             if showRoutes {
                 HStack(spacing: 10) {
                     routeLegend(dash: [], "туннель")
@@ -151,6 +157,20 @@ struct MapScreen: View {
         .padding(10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
         .fixedSize()
+    }
+
+    /// Routes need agent 0.4+; an older agent and "no cascades" look the
+    /// same in the snapshot, so the hint names both.
+    private var noRoutesReason: String? {
+        if model.statuses.allSatisfy({ $0.snapshot == nil }) { return nil }
+        return "Каскадов не видно. Если они настроены, переустановите агента на серверах: правый клик → «Переустановить агента…»."
+    }
+
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .font(.caption).foregroundStyle(.secondary)
+            .frame(width: 220, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func routeLegend(dash: [CGFloat], _ t: String) -> some View {
