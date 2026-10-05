@@ -19,6 +19,8 @@ public struct Snapshot: Codable, Equatable, Sendable {
     public var vpn: [VPN]?
     public var services: [Service]?
     public var checks: [Check]?
+    /// Outgoing connections to public addresses (agent 0.4+), for VPN cascades.
+    public var links: [Link]?
     public var errors: [String]?
 
     public struct CPU: Codable, Equatable, Sendable {
@@ -93,7 +95,20 @@ public struct Snapshot: Codable, Equatable, Sendable {
             public var active: Bool
             public var rxBytes: UInt64
             public var txBytes: UInt64
+            /// Where the peer was last seen, "ip:port".
+            public var endpoint: String?
+            /// "0.0.0.0/0" here means traffic leaves through this peer.
+            public var allowedIps: String?
         }
+    }
+
+    public struct Link: Codable, Equatable, Sendable {
+        public var remoteIp: String
+        public var ports: [Int]
+        public var protos: [String]
+        public var connections: Int
+        /// "host" or the names of the containers making the connections.
+        public var via: [String]
     }
 
     public struct Service: Codable, Equatable, Sendable {
