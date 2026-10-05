@@ -28,6 +28,7 @@ public struct SettingsView: View {
 private struct GeneralSettings: View {
     @ObservedObject var model: AppModel
     @AppStorage("sshUser.default") private var sshUser = "root"
+    @AppStorage(Poller.refreshDefaultsKey) private var refresh = Poller.interval
 
     var body: some View {
         Form {
@@ -39,7 +40,14 @@ private struct GeneralSettings: View {
                         Button("Перечитать") { Task { await model.reload() } }
                     }
                 }
-                LabeledContent("Опрос", value: "раз в \(Int(Poller.interval)) с")
+                Picker("Обновление данных", selection: $refresh) {
+                    ForEach(Poller.refreshChoices, id: \.self) { s in
+                        Text(s >= 60 ? "раз в минуту" : "каждые \(Int(s)) с").tag(s)
+                    }
+                }
+                .onChange(of: refresh) { _, s in model.setRefreshInterval(s) }
+                Text("Агенты на серверах снимают показатели с той же частотой. История и уведомления остаются поминутными.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let err = model.configError {
                     Text(err).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                 }
