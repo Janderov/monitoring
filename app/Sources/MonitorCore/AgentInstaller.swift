@@ -112,7 +112,8 @@ public actor AgentInstaller {
             step = .prepare
             progress(.prepare, .running)
             guard let bundle else { throw InstallError(step, "в приложении нет файлов агента, соберите его заново") }
-            let files = ["monitor-agent-linux-\(arch)", "monitor-agent.service", "install.sh", "SHA256SUMS"]
+            let files = ["monitor-agent-linux-\(arch)", "monitor-agent.service", "monitor-agent-flows.service", "install.sh",
+                         "SHA256SUMS"]
                 .map { bundle.appendingPathComponent($0) }
             for f in files where !FileManager.default.fileExists(atPath: f.path) {
                 throw InstallError(step, "в приложении нет файла \(f.lastPathComponent)")

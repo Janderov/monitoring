@@ -29,7 +29,7 @@ done
 [[ -n "$TARGET" ]] || { sed -n '2,13p' "$0"; exit 2; }
 
 DIST="$(cd "$(dirname "$0")/.." && pwd)/dist"
-for f in monitor-agent-linux-amd64 monitor-agent-linux-arm64 monitor-agent.service install.sh SHA256SUMS; do
+for f in monitor-agent-linux-amd64 monitor-agent-linux-arm64 monitor-agent.service monitor-agent-flows.service install.sh SHA256SUMS; do
   [[ -f "$DIST/$f" ]] || { echo "missing $DIST/$f, run agent/scripts/dist.sh first" >&2; exit 1; }
 done
 
@@ -57,7 +57,7 @@ printf '%s\n' "$TOKEN" > "$LOCAL_TMP/token"
 
 echo "connecting to $TARGET..."
 REMOTE_DIR="$("${SSH[@]}" "$TARGET" 'mktemp -d /tmp/monitor-agent-install.XXXXXX')"
-"${SCP[@]}" "$DIST"/monitor-agent-linux-* "$DIST/monitor-agent.service" "$DIST/install.sh" \
+"${SCP[@]}" "$DIST"/monitor-agent-linux-* "$DIST/monitor-agent.service" "$DIST/monitor-agent-flows.service" "$DIST/install.sh" \
   "$DIST/SHA256SUMS" "$LOCAL_TMP/token" "$TARGET:$REMOTE_DIR/"
 
 # -t so sudo can ask for a password; the temp dir is removed whatever happens.

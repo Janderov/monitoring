@@ -28,6 +28,7 @@ import (
 	"github.com/Janderov/monitoring/agent/internal/collect"
 	"github.com/Janderov/monitoring/agent/internal/config"
 	"github.com/Janderov/monitoring/agent/internal/docker"
+	"github.com/Janderov/monitoring/agent/internal/flows"
 	"github.com/Janderov/monitoring/agent/internal/links"
 	"github.com/Janderov/monitoring/agent/internal/probe"
 	"github.com/Janderov/monitoring/agent/internal/server"
@@ -49,6 +50,8 @@ func main() {
 		err = cmdRun(os.Args[2:])
 	case "fingerprint":
 		err = cmdFingerprint(os.Args[2:])
+	case "flows":
+		err = cmdFlows(os.Args[2:])
 	case "version":
 		fmt.Println(version)
 	default:
@@ -61,7 +64,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: monitor-agent init|run|fingerprint|version [-config path]")
+	fmt.Fprintln(os.Stderr, "usage: monitor-agent init|run|flows|fingerprint|version [-config path]")
 	os.Exit(2)
 }
 
@@ -202,6 +205,9 @@ func cmdRun(args []string) error {
 		checks:     checks,
 		budget:     c.Interval.Duration * 3 / 4,
 		listenPort: listenPort(c.Listen),
+		flowsFile:  flows.DefaultPath,
+		// The helper writes every 30 s; a few missed rounds mean it is gone.
+		flowsMaxAge: 3 * time.Minute,
 	}
 	ring := buffer.New(c.BufferSize)
 	go sampleLoop(ctx, s, ring, c.Interval.Duration)
@@ -227,6 +233,79 @@ func cmdRun(args []string) error {
 		return err
 	}
 	return nil
+}
+
+// cmdFlows is the root helper: every 30 s it reads the conntrack tables of the
+// host and of each container namespace and writes a summary for the agent.
+// Its systemd unit gives it no network access.
+func cmdFlows(args []string) error {
+	fs := flag.NewFlagSet("flows", flag.ExitOnError)
+	path := fs.String("config", config.DefaultPath, "config file path")
+	out := fs.String("out", flows.DefaultPath, "summary file")
+	every := fs.Duration("every", 30*time.Second, "interval")
+	once := fs.Bool("once", false, "write one summary and exit")
+	fs.Parse(args)
+
+	c, err := config.Load(*path)
+	if err != nil {
+		return err
+	}
+	var dk *docker.Client
+	if c.DockerSocket != "" {
+		if _, err := os.Stat(c.DockerSocket); err == nil {
+			dk = docker.New(c.DockerSocket)
+		}
+	}
+	ignore := map[int]bool{listenPort(c.Listen): true, 22: true}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	for {
+		sum := flows.Collect(flowSources(c.ProcRoot, dk), ignore, time.Now())
+		if err := flows.Write(*out, sum); err != nil {
+			return err
+		}
+		if *once {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(*every):
+		}
+	}
+}
+
+// flowSources lists the host and each container with its own network
+// namespace; host-network containers share the host's table.
+func flowSources(procRoot string, dk *docker.Client) []flows.Source {
+	src := []flows.Source{{Label: "host", NetDir: filepath.Join(procRoot, "net")}}
+	if dk == nil {
+		return src
+	}
+	seen := map[string]bool{}
+	if ns, err := os.Readlink(filepath.Join(procRoot, "1", "ns", "net")); err == nil {
+		seen[ns] = true
+	}
+	cts, err := dk.List()
+	if err != nil {
+		return src
+	}
+	for _, ct := range cts {
+		if ct.State != "running" {
+			continue
+		}
+		pid, err := dk.Pid(ct.ID)
+		if err != nil || pid <= 0 {
+			continue
+		}
+		ns, err := os.Readlink(filepath.Join(procRoot, strconv.Itoa(pid), "ns", "net"))
+		if err != nil || seen[ns] {
+			continue
+		}
+		seen[ns] = true
+		src = append(src, flows.Source{Label: ct.Name, NetDir: filepath.Join(procRoot, strconv.Itoa(pid), "net")})
+	}
+	return src
 }
 
 // handshakeFilter drops "TLS handshake error" lines: neighbour agents probe
@@ -269,6 +348,9 @@ type sampler struct {
 	budget   time.Duration // remote checks must finish within this
 	// listenPort is the agents' own port: neighbour probes to it are not traffic.
 	listenPort int
+	// flowsFile is written by the root helper (monitor-agent flows).
+	flowsFile   string
+	flowsMaxAge time.Duration
 }
 
 // linkSources lists the host and every running container's network namespace.
@@ -296,6 +378,9 @@ func (s *sampler) sample(ctx context.Context) collect.Snapshot {
 	}
 	snap.Services = probe.Services(s.procRoot, s.services)
 	snap.Links = links.Collect(s.linkSources(snap.Containers), map[int]bool{s.listenPort: true})
+	if f := flows.Read(s.flowsFile, now, s.flowsMaxAge); f != nil {
+		snap.Forwards, snap.Inbound = f.Forwards, f.Inbound
+	}
 	if targets := s.checks.Get(); len(targets) > 0 {
 		ctx, cancel := context.WithTimeout(ctx, s.budget)
 		snap.Checks = probe.Run(ctx, targets)

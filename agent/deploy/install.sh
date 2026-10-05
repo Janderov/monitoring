@@ -39,6 +39,8 @@ CONF="$CONF_DIR/config.json"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 UNIT_SRC="$HERE/monitor-agent.service"
 [[ -f "$UNIT_SRC" ]] || die "monitor-agent.service must be next to install.sh"
+# Optional root helper for NAT and inbound connections (older bundles lack it).
+FLOWS_SRC="$HERE/monitor-agent-flows.service"
 
 if [[ -z "$BINARY" ]]; then
   case "$(uname -m)" in
@@ -50,7 +52,7 @@ if [[ -z "$BINARY" ]]; then
   [[ -f "$BINARY" ]] || die "$BINARY not found"
   if [[ -f "$HERE/SHA256SUMS" ]]; then
     # Catch a truncated or corrupted copy before replacing a working agent.
-    (cd "$HERE" && grep -E " (monitor-agent-linux-$ARCH|monitor-agent.service)\$" SHA256SUMS | sha256sum -c --quiet -) \
+    (cd "$HERE" && grep -E " (monitor-agent-linux-$ARCH|monitor-agent(-flows)?\.service)\$" SHA256SUMS | sha256sum -c --quiet -) \
       || die "checksum mismatch, refusing to install"
   fi
 fi
@@ -94,6 +96,13 @@ install -m 0644 "$UNIT_SRC" /etc/systemd/system/monitor-agent.service
 systemctl daemon-reload
 systemctl enable monitor-agent >/dev/null
 systemctl restart monitor-agent
+if [[ -f "$FLOWS_SRC" ]]; then
+  install -m 0644 "$FLOWS_SRC" /etc/systemd/system/monitor-agent-flows.service
+  systemctl daemon-reload
+  systemctl enable monitor-agent-flows >/dev/null
+  systemctl restart monitor-agent-flows
+  echo "flows helper: running"
+fi
 
 # Only nag when the firewall is on and has no rule for the agent port yet.
 if command -v ufw >/dev/null && ufw status | grep -q "Status: active" \

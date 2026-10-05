@@ -22,7 +22,7 @@ agent_dist=../agent/dist
 if [[ -f "$agent_dist/SHA256SUMS" ]]; then
   mkdir -p "$app/Contents/Resources/agent"
   cp "$agent_dist"/monitor-agent-linux-amd64 "$agent_dist"/monitor-agent-linux-arm64 \
-     "$agent_dist"/monitor-agent.service "$agent_dist"/install.sh "$agent_dist"/SHA256SUMS \
+     "$agent_dist"/monitor-agent.service "$agent_dist"/monitor-agent-flows.service "$agent_dist"/install.sh "$agent_dist"/SHA256SUMS \
      "$app/Contents/Resources/agent/"
 elif [[ -n "${REQUIRE_AGENT:-}" ]]; then
   echo "agent/dist is missing: run agent/scripts/dist.sh first" >&2

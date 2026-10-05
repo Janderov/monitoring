@@ -7,8 +7,10 @@ public struct VPNRoute: Equatable, Identifiable, Sendable {
         /// An AmneziaWG/WireGuard peer of the entry server that routes all
         /// traffic (0.0.0.0/0) to the exit server.
         case tunnel
-        /// Open connections from the entry server (host or a container such
-        /// as xray) to the exit server.
+        /// Traffic from the entry server to the exit server: its own
+        /// connections (host or a container such as xray), client traffic it
+        /// passes on through NAT, or connections the exit server sees coming
+        /// in from it.
         case relay
     }
 
@@ -16,7 +18,8 @@ public struct VPNRoute: Equatable, Identifiable, Sendable {
     public var fromID: String
     public var toID: String
     public var kind: Kind
-    /// Containers carrying the traffic, e.g. ["amnezia-xray"], or ["host"].
+    /// Containers carrying the traffic, e.g. ["amnezia-xray"], ["host"], or
+    /// ["nat:host"] for forwarded client traffic.
     public var via: [String]
     /// Remote ports on the exit server.
     public var ports: [Int]
@@ -41,7 +44,8 @@ public enum VPNRoutes {
             if r.kind == .tunnel { cur.kind = .tunnel }
             cur.via = Array(Set(cur.via + r.via)).sorted()
             cur.ports = Array(Set(cur.ports + r.ports)).sorted()
-            cur.connections += r.connections
+            // The same connections can be seen from both ends.
+            cur.connections = max(cur.connections, r.connections)
             cur.active = cur.active || r.active
             routes[r.id] = cur
         }
@@ -58,11 +62,19 @@ public enum VPNRoutes {
                                    connections: 1, active: p.active))
                 }
             }
-            for l in snap.links ?? [] {
+            for l in (snap.links ?? []) + (snap.forwards ?? []) {
                 guard let to = byIP[l.remoteIp], to != from else { continue }
                 let ports = l.ports.filter { !ignoredPorts.contains($0) && $0 != port(of: to, in: statuses) }
                 guard !ports.isEmpty else { continue }
                 merge(VPNRoute(fromID: from, toID: to, kind: .relay, via: l.via, ports: ports,
+                               connections: l.connections, active: l.connections > 0))
+            }
+            // Seen from the exit side: another of our servers connecting in.
+            for l in snap.inbound ?? [] {
+                guard let src = byIP[l.remoteIp], src != from else { continue }
+                let ports = l.ports.filter { !ignoredPorts.contains($0) && $0 != s.server.port }
+                guard !ports.isEmpty else { continue }
+                merge(VPNRoute(fromID: src, toID: from, kind: .relay, via: [], ports: ports,
                                connections: l.connections, active: l.connections > 0))
             }
         }

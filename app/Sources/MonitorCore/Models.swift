@@ -21,6 +21,10 @@ public struct Snapshot: Codable, Equatable, Sendable {
     public var checks: [Check]?
     /// Outgoing connections to public addresses (agent 0.4+), for VPN cascades.
     public var links: [Link]?
+    /// Client traffic the server passes on through NAT, by real destination.
+    public var forwards: [Link]?
+    /// Connections coming in from public addresses, by source; `ports` are local.
+    public var inbound: [Link]?
     public var errors: [String]?
 
     public struct CPU: Codable, Equatable, Sendable {

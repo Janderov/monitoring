@@ -7,6 +7,32 @@ final class RoutesTests: XCTestCase {
         ServerConfig(id: id, name: id, host: host, token: "t", fingerprint: "f")
     }
 
+    func testForwardedAndInbound() {
+        // NL forwards client traffic (NAT) to the US; RU sees US connecting in.
+        var nl = Fixtures.snapshot()
+        nl.forwards = [.init(remoteIp: "149.28.225.248", ports: [443], protos: ["tcp"], connections: 12,
+                             via: ["nat:host"]),
+                       .init(remoteIp: "142.250.1.1", ports: [443], protos: ["udp"], connections: 40,
+                             via: ["nat:host"])]
+        var us = Fixtures.snapshot()
+        // The US also sees NL coming in: the same traffic, counted once.
+        us.inbound = [.init(remoteIp: "103.54.19.175", ports: [443], protos: ["tcp"], connections: 10, via: ["host"]),
+                      .init(remoteIp: "155.212.164.127", ports: [22, 9443], protos: ["tcp"], connections: 1,
+                            via: ["host"])]
+        var ru = Fixtures.snapshot()
+        ru.inbound = [.init(remoteIp: "149.28.225.248", ports: [8443], protos: ["tcp"], connections: 3, via: ["host"])]
+        let statuses = [
+            ServerStatus(server: server("nl", "103.54.19.175"), snapshot: nl, lastSeen: nil, error: nil, alerts: []),
+            ServerStatus(server: server("ru", "155.212.164.127"), snapshot: ru, lastSeen: nil, error: nil, alerts: []),
+            ServerStatus(server: server("us", "149.28.225.248"), snapshot: us, lastSeen: nil, error: nil, alerts: []),
+        ]
+        let routes = VPNRoutes.compute(statuses)
+        XCTAssertEqual(routes.map(\.id), ["nl->us", "us->ru"])
+        XCTAssertEqual(routes[0].via, ["nat:host"])
+        XCTAssertEqual(routes[0].connections, 12)
+        XCTAssertEqual(routes[1].ports, [8443])
+    }
+
     func testTunnelAndRelay() throws {
         var nl = Fixtures.snapshot()
         // Entry NL: a WireGuard peer that routes everything to the US server...

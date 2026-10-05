@@ -1,0 +1,36 @@
+[Unit]
+Description=Monitoring agent helper (forwarded and inbound connections from conntrack)
+Documentation=https://github.com/Janderov/monitoring
+After=docker.service
+PartOf=monitor-agent.service
+
+[Service]
+Type=simple
+# conntrack tables are readable only by root. This helper has no network
+# access; it only reads /proc and the Docker API and writes one file for the
+# unprivileged agent (group monitor-agent).
+Group=monitor-agent
+ExecStart=/usr/local/bin/monitor-agent flows -config /etc/monitor-agent/config.json
+Restart=always
+RestartSec=10
+RuntimeDirectory=monitor-agent-flows
+RuntimeDirectoryMode=0750
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+ReadOnlyPaths=/etc/monitor-agent
+
+[Install]
+WantedBy=multi-user.target
