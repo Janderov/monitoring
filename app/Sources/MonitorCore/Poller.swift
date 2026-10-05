@@ -123,11 +123,19 @@ public actor Poller {
         task = nil
     }
 
+    /// What one agent probes: the sites it checks, and every other server's
+    /// agent port, so the map shows who reaches whom.
+    static func targets(for s: ServerConfig, servers: [ServerConfig], sites: [SiteConfig]) -> [CheckTarget] {
+        sites.filter { $0.checked(from: s) }.map { CheckTarget.http($0.checkID, url: $0.url) }
+            + servers.filter { $0.id != s.id && $0.host != s.host }
+                .map { CheckTarget.tcp($0.peerCheckID, host: $0.host, port: $0.port) }
+    }
+
     /// One round over all servers, in parallel.
     public func pollAll(now: Date) async {
         let list = servers
         let wanted = Dictionary(uniqueKeysWithValues: list.map { s in
-            (s.id, sites.filter { $0.checked(from: s) }.map { CheckTarget.http($0.checkID, url: $0.url) })
+            (s.id, Poller.targets(for: s, servers: list, sites: sites))
         })
         let results = await withTaskGroup(of: (ServerConfig, PollResult).self) { group in
             for s in list {

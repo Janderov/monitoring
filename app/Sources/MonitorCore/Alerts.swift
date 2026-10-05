@@ -109,8 +109,10 @@ public enum Rules {
             out.append(Condition(key: "ctr:\(c.name)", severity: .warning,
                                  message: "контейнер \(c.name) нездоров"))
         }
-        // Sites the app manages are judged across all countries by SiteRules.
-        for c in s.checks ?? [] where !c.id.hasPrefix(SiteConfig.checkPrefix) {
+        // Sites the app manages are judged across all countries by SiteRules;
+        // links between our servers are shown on the map, not alerted on the source.
+        for c in s.checks ?? [] where !c.id.hasPrefix(SiteConfig.checkPrefix)
+            && !c.id.hasPrefix(ServerConfig.peerCheckPrefix) {
             if !c.ok {
                 out.append(Condition(key: "check:\(c.id)", severity: .critical,
                                      message: "\(c.target) недоступен: \(c.error ?? "HTTP \(c.statusCode ?? 0)")"))
