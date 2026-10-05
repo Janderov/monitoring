@@ -70,6 +70,12 @@ public final class UpdateModel: ObservableObject {
     /// Downloads and installs; the new copy then quits this one.
     public func install() async {
         guard let token, let update = available else { return }
+        // macOS runs a quarantined app from Downloads off a read-only copy
+        // (App Translocation), so the updater cannot replace it.
+        if Bundle.main.bundlePath.contains("/AppTranslocation/") {
+            state = .failed("macOS запустила приложение из временной копии, обновить её нельзя. Закройте приложение, перетащите его в Finder в папку «Программы» и запустите оттуда.")
+            return
+        }
         state = .downloading(update)
         do {
             let u = AppUpdater(token: token)
@@ -79,7 +85,7 @@ public final class UpdateModel: ObservableObject {
                 try u.install(file)
             }
         } catch {
-            state = .failed(String(describing: error))
+            state = .failed(error.localizedDescription)
         }
     }
 
