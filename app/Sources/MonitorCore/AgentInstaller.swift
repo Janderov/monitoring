@@ -47,10 +47,12 @@ public struct InstallResult: Equatable, Sendable {
     /// usually means a hosting firewall in front of the server.
     public var verified: Bool
 
-    /// A server entry ready for `ConfigRepository.upsertServer`.
-    public func server(id: String, name: String, group: String? = nil, tags: [String]? = nil) -> ServerConfig {
+    /// A server entry ready for `ConfigRepository.upsertServer`; pass the
+    /// SSH target used for the install so VPN keys can reuse it.
+    public func server(id: String, name: String, group: String? = nil, tags: [String]? = nil,
+                       ssh: SSHTarget? = nil) -> ServerConfig {
         ServerConfig(id: id, name: name, host: host, port: port, token: token, fingerprint: fingerprint,
-                     group: group, tags: tags)
+                     group: group, tags: tags, ssh: ssh)
     }
 }
 

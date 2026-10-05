@@ -16,19 +16,25 @@ public struct ServerConfig: Codable, Equatable, Identifiable, Sendable {
     public var tags: [String]?
     /// Optional per-server overrides of the default alert thresholds.
     public var thresholds: Thresholds?
+    /// How the Mac logs in over SSH (agent install, VPN keys), as entered in
+    /// the add-server form; nil means `ssh root@host` with ~/.ssh/config.
+    public var ssh: SSHTarget?
 
     public init(id: String, name: String, host: String, port: Int = 9443, token: String,
                 fingerprint: String, group: String? = nil, tags: [String]? = nil,
-                thresholds: Thresholds? = nil) {
+                thresholds: Thresholds? = nil, ssh: SSHTarget? = nil) {
         self.id = id; self.name = name; self.host = host; self.port = port
         self.token = token; self.fingerprint = fingerprint
-        self.group = group; self.tags = tags; self.thresholds = thresholds
+        self.group = group; self.tags = tags; self.thresholds = thresholds; self.ssh = ssh
     }
+
+    /// Where to SSH for this server.
+    public var sshTarget: SSHTarget { ssh ?? SSHTarget(host: host, user: "root") }
 
     public var baseURL: URL { URL(string: "https://\(host):\(port)")! }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, host, port, token, fingerprint, group, tags, thresholds
+        case id, name, host, port, token, fingerprint, group, tags, thresholds, ssh
     }
 
     public init(from decoder: Decoder) throws {
@@ -42,6 +48,7 @@ public struct ServerConfig: Codable, Equatable, Identifiable, Sendable {
         group = try c.decodeIfPresent(String.self, forKey: .group)
         tags = try c.decodeIfPresent([String].self, forKey: .tags)
         thresholds = try c.decodeIfPresent(Thresholds.self, forKey: .thresholds)
+        ssh = try c.decodeIfPresent(SSHTarget.self, forKey: .ssh)
     }
 
     /// An empty token is omitted, which is how the file stores servers whose
@@ -57,6 +64,7 @@ public struct ServerConfig: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(group, forKey: .group)
         try c.encodeIfPresent(tags, forKey: .tags)
         try c.encodeIfPresent(thresholds, forKey: .thresholds)
+        try c.encodeIfPresent(ssh, forKey: .ssh)
     }
 }
 

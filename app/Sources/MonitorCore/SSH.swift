@@ -2,7 +2,7 @@ import Foundation
 
 /// How to log in to a server over SSH. Anything left out comes from
 /// ~/.ssh/config, the same as typing `ssh host` in Terminal.
-public struct SSHTarget: Equatable, Sendable {
+public struct SSHTarget: Codable, Equatable, Sendable {
     /// IP, name, or a Host alias from ~/.ssh/config.
     public var host: String
     public var port: Int?
@@ -13,6 +13,8 @@ public struct SSHTarget: Equatable, Sendable {
     public init(host: String, port: Int? = nil, user: String? = nil, identityFile: String? = nil) {
         self.host = host; self.port = port; self.user = user; self.identityFile = identityFile
     }
+
+    enum CodingKeys: String, CodingKey { case host, port, user, identityFile }
 
     /// Options for ssh(1); scp(1) takes the same ones except the port flag.
     func options(forSCP: Bool = false) -> [String] {
