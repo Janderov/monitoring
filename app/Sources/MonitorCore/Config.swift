@@ -29,6 +29,10 @@ public struct ServerConfig: Codable, Equatable, Identifiable, Sendable {
     }
 
     /// Where to SSH for this server.
+    /// Id of the TCP check other agents run against this server.
+    public var peerCheckID: String { ServerConfig.peerCheckPrefix + id }
+    public static let peerCheckPrefix = "peer-"
+
     public var sshTarget: SSHTarget { ssh ?? SSHTarget(host: host, user: "root") }
 
     public var baseURL: URL { URL(string: "https://\(host):\(port)")! }

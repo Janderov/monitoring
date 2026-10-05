@@ -160,6 +160,23 @@ final class DomainExpiryTests: XCTestCase {
 }
 
 final class SitePollerTests: XCTestCase {
+    func testAgentsProbeEachOther() {
+        var us = Fixtures.server
+        us.id = "us"; us.host = "198.51.100.7"; us.port = 9443
+        var twin = Fixtures.server
+        twin.id = "nl-2"  // same machine under another name: not probed
+        let site = SiteConfig(id: "shop", name: "Магазин", url: "https://shop.example.com")
+        let t = Poller.targets(for: Fixtures.server, servers: [Fixtures.server, us, twin], sites: [site])
+        XCTAssertEqual(t, [.http("site-shop", url: "https://shop.example.com"),
+                           .tcp("peer-us", host: "198.51.100.7", port: 9443)])
+
+        // A peer that does not answer is drawn red on the map, not alerted on the prober.
+        var snap = Fixtures.snapshot(time: Date())
+        snap.checks = [Snapshot.Check(id: "peer-us", kind: "tcp", target: "198.51.100.7:9443", ok: false,
+                                      statusCode: nil, latencyMs: 0, tlsExpiry: nil, error: "timeout")]
+        XCTAssertFalse(Rules.conditions(.snapshot(snap), thresholds: nil, now: Date()).contains { $0.key.hasPrefix("check:") })
+    }
+
     func testPushesTargetsOnceAndAlertsOnSite() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
