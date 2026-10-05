@@ -18,10 +18,20 @@ struct MonitorApp: App {
     }
 
     var body: some Scene {
+        Window("Монитор", id: MainWindow.id) {
+            MainWindow(model: model)
+        }
+        .defaultSize(width: 1180, height: 760)
+        .commands { MonitorCommands(model: model) }
+
+        Settings {
+            SettingsView(model: model)
+        }
+
         MenuBarExtra {
-            MenuView(model: model)
+            MenuBarContent(model: model)
         } label: {
-            Image(nsImage: StatusDot.image(for: model.overall))
+            Image(nsImage: MenuBarIcon.image(for: model.overall))
         }
         .menuBarExtraStyle(.window)
     }
@@ -59,99 +69,6 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate, @unchecked Sen
     }
 }
 
-enum StatusDot {
-    static func color(_ level: ServerStatus.Level) -> NSColor {
-        switch level {
-        case .ok: return .systemGreen
-        case .warning: return .systemYellow
-        case .critical: return .systemRed
-        case .unknown: return .systemGray
-        }
-    }
-
-    /// A colored (non-template) dot so the menu bar shows the state color.
-    static func image(for level: ServerStatus.Level) -> NSImage {
-        let size = NSSize(width: 14, height: 14)
-        let img = NSImage(size: size, flipped: false) { rect in
-            color(level).setFill()
-            NSBezierPath(ovalIn: rect.insetBy(dx: 2, dy: 2)).fill()
-            return true
-        }
-        img.isTemplate = false
-        img.accessibilityDescription = "Мониторинг"
-        return img
-    }
-}
-
-struct MenuView: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let err = model.configError {
-                Label(err, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if model.statuses.isEmpty && model.configError == nil {
-                Text("Серверов пока нет. Добавьте их в servers.json.")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(model.statuses) { ServerRow(status: $0) }
-            Divider()
-            HStack {
-                Button("servers.json") { model.openConfig() }
-                Button("Папка данных") { model.openDataFolder() }
-                Button("Перечитать") { Task { await model.reload() } }
-                Spacer()
-                Button("Выход") { NSApp.terminate(nil) }
-            }
-            .buttonStyle(.borderless)
-        }
-        .padding(12)
-        .frame(width: 380)
-    }
-}
-
-struct ServerRow: View {
-    let status: ServerStatus
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Circle().fill(Color(nsColor: StatusDot.color(status.level))).frame(width: 9, height: 9)
-                Text(status.server.name).fontWeight(.medium)
-                if let g = status.server.group { Text(g).foregroundStyle(.secondary).font(.caption) }
-                Spacer()
-                if let seen = status.lastSeen {
-                    Text(seen, style: .relative).foregroundStyle(.secondary).font(.caption)
-                }
-            }
-            if let s = status.snapshot {
-                Text(summary(s)).font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(status.alerts, id: \.key) { a in
-                Text("• \(a.message)").font(.caption)
-                    .foregroundStyle(a.severity == .critical ? Color.red : Color.orange)
-            }
-            if let err = status.error, !status.alerts.contains(where: { $0.key == "down" }) {
-                Text(err).font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func summary(_ s: Snapshot) -> String {
-        var parts = [
-            String(format: "CPU %.0f%%", s.cpu.usagePercent),
-            String(format: "RAM %.0f%%", s.memory.usedPercent),
-            String(format: "диск %.0f%%", s.maxDiskPercent),
-        ]
-        if let vpn = s.vpn, vpn.contains(where: { $0.clientsKnown == true }) {
-            parts.append("VPN \(s.vpnActiveClients) онлайн")
-        }
-        return parts.joined(separator: " · ")
-    }
-}
 #else
 // The app is macOS-only; on Linux (CI) only MonitorCore and its tests matter.
 @main
