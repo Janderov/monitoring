@@ -3,8 +3,12 @@ name: agent
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     paths: ["agent/**", ".github/workflows/agent.yml"]
+
+permissions:
+  contents: write  # only used by the release step on tags
 
 jobs:
   test:
@@ -22,7 +26,15 @@ jobs:
       - run: go vet ./...
       - run: GOOS=darwin go vet ./...
       - run: go test -race ./...
-      - name: build linux binaries
-        run: |
-          GOOS=linux GOARCH=amd64 go build -o /tmp/monitor-agent-amd64 ./cmd/monitor-agent
-          GOOS=linux GOARCH=arm64 go build -o /tmp/monitor-agent-arm64 ./cmd/monitor-agent
+      - name: build install bundle
+        run: scripts/dist.sh "${GITHUB_REF_NAME//\//-}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: monitor-agent-dist
+          path: agent/dist/
+      # Tagging vX.Y.Z publishes the bundle as a release of this (private) repo.
+      - name: release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "agent $GITHUB_REF_NAME" --generate-notes

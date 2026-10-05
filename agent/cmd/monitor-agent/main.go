@@ -71,6 +71,7 @@ func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	path := fs.String("config", config.DefaultPath, "config file path")
 	token := fs.String("token", "", "token issued by the Mac app (generated if empty)")
+	tokenFile := fs.String("token-file", "", "read the token from this file instead of -token")
 	listen := fs.String("listen", ":9443", "HTTPS listen address")
 	force := fs.Bool("force", false, "overwrite an existing config and certificate")
 	var hosts hostList
@@ -88,6 +89,14 @@ func cmdInit(args []string) error {
 	c := config.Default(dir)
 	c.Listen = *listen
 	c.Token = *token
+	if *tokenFile != "" {
+		b, err := os.ReadFile(*tokenFile)
+		if err != nil {
+			return err
+		}
+		c.Token = strings.TrimSpace(string(b))
+		*token = c.Token // issued by the caller, so don't echo it back
+	}
 	if c.Token == "" {
 		t, err := config.NewToken()
 		if err != nil {
