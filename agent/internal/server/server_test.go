@@ -1,6 +1,7 @@
 package server
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Janderov/monitoring/agent/internal/buffer"
 	"github.com/Janderov/monitoring/agent/internal/collect"
+	"github.com/Janderov/monitoring/agent/internal/pace"
 	"github.com/Janderov/monitoring/agent/internal/probe"
 )
 
@@ -21,6 +23,15 @@ func store(t *testing.T) *probe.Store {
 		t.Fatal(err)
 	}
 	return s
+}
+
+func testPace(t *testing.T) *pace.Pace {
+	t.Helper()
+	p, err := pace.Open(filepath.Join(t.TempDir(), "pace.json"), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 const token = "0123456789abcdef0123456789abcdef"
@@ -41,7 +52,7 @@ func doMethod(t *testing.T, h http.Handler, method, path, auth, body string) *ht
 }
 
 func TestAuthRequired(t *testing.T) {
-	h := New(token, buffer.New(5), store(t), "test").Handler()
+	h := New(token, buffer.New(5), store(t), testPace(t), "test").Handler()
 	for _, auth := range []string{"", "Bearer wrong", "Basic " + token, token, "Bearer " + token + "x"} {
 		if rec := do(t, h, "/v1/health", auth); rec.Code != http.StatusUnauthorized {
 			t.Errorf("auth %q: status %d, want 401", auth, rec.Code)
@@ -58,7 +69,7 @@ func TestAuthRequired(t *testing.T) {
 
 func TestSnapshotAndHistory(t *testing.T) {
 	ring := buffer.New(1000)
-	h := New(token, ring, store(t), "test").Handler()
+	h := New(token, ring, store(t), testPace(t), "test").Handler()
 	auth := "Bearer " + token
 
 	if rec := do(t, h, "/v1/snapshot", auth); rec.Code != http.StatusServiceUnavailable {
@@ -106,7 +117,7 @@ func TestSnapshotAndHistory(t *testing.T) {
 func itoa(v int64) string { b, _ := json.Marshal(v); return string(b) }
 
 func TestChecksEndpoints(t *testing.T) {
-	h := New(token, buffer.New(5), store(t), "test").Handler()
+	h := New(token, buffer.New(5), store(t), testPace(t), "test").Handler()
 	auth := "Bearer " + token
 
 	if rec := doMethod(t, h, http.MethodPut, "/v1/checks", "", `{"targets":[]}`); rec.Code != http.StatusUnauthorized {
@@ -146,5 +157,49 @@ func TestChecksEndpoints(t *testing.T) {
 	if rec := doMethod(t, h, http.MethodPut, "/v1/checks", auth,
 		`{"targets":[{"id":"n","kind":"tcp","host":"a","port":1,"basic_auth":{"user":"u"}}]}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("basic_auth on tcp: %d, want 400", rec.Code)
+	}
+}
+
+func TestSettings(t *testing.T) {
+	p := testPace(t)
+	h := New(token, buffer.New(5), store(t), p, "test").Handler()
+	auth := "Bearer " + token
+	if rec := do(t, h, "/v1/settings", auth); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"interval_s":60`) {
+		t.Fatalf("GET = %d %s", rec.Code, rec.Body)
+	}
+	if rec := doMethod(t, h, http.MethodPut, "/v1/settings", auth, `{"interval_s":15}`); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"interval_s":15`) {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body)
+	}
+	if p.Get() != 15*time.Second {
+		t.Errorf("pace = %s, want 15s", p.Get())
+	}
+	for _, body := range []string{`{"interval_s":1}`, `{"interval":15}`, `nope`} {
+		if rec := doMethod(t, h, http.MethodPut, "/v1/settings", auth, body); rec.Code != http.StatusBadRequest {
+			t.Errorf("PUT %s = %d, want 400", body, rec.Code)
+		}
+	}
+	if p.Get() != 15*time.Second {
+		t.Errorf("rejected PUT changed pace to %s", p.Get())
+	}
+}
+
+func TestGzip(t *testing.T) {
+	h := New(token, buffer.New(5), store(t), testPace(t), "test").Handler()
+	req := httptest.NewRequest(http.MethodGet, "/v1/health", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("Content-Encoding = %q", rec.Header().Get("Content-Encoding"))
+	}
+	zr, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(zr).Decode(&body); err != nil || body["status"] != "ok" {
+		t.Errorf("decoded = %v, %v", body, err)
 	}
 }

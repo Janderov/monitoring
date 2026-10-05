@@ -15,21 +15,23 @@ import (
 // Snapshot is one sample of host state. Rates are computed against the
 // previous sample, so the first snapshot after start has zero rates.
 type Snapshot struct {
-	Time          time.Time   `json:"time"`
-	Hostname      string      `json:"hostname"`
-	UptimeSeconds float64     `json:"uptime_seconds"`
-	BootTime      time.Time   `json:"boot_time"`
-	CPU           CPU         `json:"cpu"`
-	Memory        Memory      `json:"memory"`
-	Load          Load        `json:"load"`
-	Disks         []Disk      `json:"disks"`
-	Network       Network     `json:"network"`
-	Containers    []Container `json:"containers,omitempty"`
-	Processes     []Process   `json:"processes,omitempty"`
-	VPN           []VPN       `json:"vpn,omitempty"`
-	Services      []Service   `json:"services,omitempty"`
-	Checks        []Check     `json:"checks,omitempty"`
-	Links         []Link      `json:"links,omitempty"`
+	Time     time.Time `json:"time"`
+	Hostname string    `json:"hostname"`
+	// IntervalSeconds is how often the agent samples right now.
+	IntervalSeconds int         `json:"interval_s,omitempty"`
+	UptimeSeconds   float64     `json:"uptime_seconds"`
+	BootTime        time.Time   `json:"boot_time"`
+	CPU             CPU         `json:"cpu"`
+	Memory          Memory      `json:"memory"`
+	Load            Load        `json:"load"`
+	Disks           []Disk      `json:"disks"`
+	Network         Network     `json:"network"`
+	Containers      []Container `json:"containers,omitempty"`
+	Processes       []Process   `json:"processes,omitempty"`
+	VPN             []VPN       `json:"vpn,omitempty"`
+	Services        []Service   `json:"services,omitempty"`
+	Checks          []Check     `json:"checks,omitempty"`
+	Links           []Link      `json:"links,omitempty"`
 	// Forwards: client traffic this server passes on (NAT), by real destination.
 	Forwards []Link `json:"forwards,omitempty"`
 	// Inbound: connections from public addresses to this server, by source.

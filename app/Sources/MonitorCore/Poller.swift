@@ -28,9 +28,16 @@ public struct ServerStatus: Equatable, Identifiable, Sendable {
 
 /// Polls every agent once a minute: pulls the history missed since the last
 /// stored sample (up to the agent's 24 h buffer), stores it, evaluates alert
-/// rules on the fresh snapshot and reports notifications.
+/// rules on the fresh snapshot and reports notifications. With a shorter
+/// refresh interval it also fetches just the current snapshot in between, so
+/// the screens update faster while alerts and history stay per minute.
 public actor Poller {
+    /// The full round: history, database, alerts.
     public static let interval: TimeInterval = 60
+    /// Refresh intervals offered in Settings; agents sample at the same rate.
+    public static let refreshChoices: [TimeInterval] = [10, 15, 30, 60]
+    /// UserDefaults key of the chosen refresh interval.
+    public static let refreshDefaultsKey = "refreshInterval"
     /// How far back to backfill a server seen for the first time.
     public static let firstBackfill: TimeInterval = 24 * 3600
 
@@ -40,6 +47,8 @@ public actor Poller {
     private var engine = AlertEngine()
     private var statuses: [String: ServerStatus] = [:]
     private var task: Task<Void, Never>?
+    private var refresh: TimeInterval = Poller.interval
+    private var lastFullRound: Date?
 
     private var sites: [SiteConfig] = []
     private var siteStatuses: [String: SiteStatus] = [:]
@@ -112,10 +121,57 @@ public actor Poller {
         guard task == nil else { return }
         task = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.pollAll(now: Date())
-                try? await Task.sleep(nanoseconds: UInt64(Poller.interval * 1_000_000_000))
+                guard let pause = await self?.tick(now: Date()) else { return }
+                try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
             }
         }
+    }
+
+    /// How often the screens refresh (and agents sample), clamped to the
+    /// offered range. A running loop restarts so the change applies at once.
+    public func setRefreshInterval(_ seconds: TimeInterval) {
+        let clamped = min(max(seconds, Poller.refreshChoices.min()!), Poller.interval)
+        guard clamped != refresh else { return }
+        refresh = clamped
+        if task != nil {
+            stop()
+            start()
+        }
+    }
+
+    /// A full round once a minute, a snapshot-only round in between; returns
+    /// the pause before the next tick.
+    func tick(now: Date) async -> TimeInterval {
+        if let last = lastFullRound, now.timeIntervalSince(last) < Poller.interval - 1 {
+            await refreshLive(now: now)
+        } else {
+            await pollAll(now: now)
+        }
+        return refresh
+    }
+
+    /// Fetches only the current snapshot of every server and redraws. Nothing
+    /// is stored and no alert changes: a failure here waits for the full round.
+    public func refreshLive(now: Date) async {
+        let list = servers
+        let snaps = await withTaskGroup(of: (String, Snapshot?).self) { group in
+            for s in list {
+                group.addTask { [client] in (s.id, try? await client.snapshot(s)) }
+            }
+            var out: [String: Snapshot] = [:]
+            for await (id, snap) in group { out[id] = snap }
+            return out
+        }
+        for (id, snap) in snaps {
+            guard var st = statuses[id] else { continue }
+            st.snapshot = snap
+            st.lastSeen = now
+            statuses[id] = st
+        }
+        let fresh = Set(statuses.filter { $0.value.error == nil && $0.value.snapshot != nil }.keys)
+        _ = await evaluateSites(fresh: fresh, macOffline: false, alerts: false, now: now)
+        publish()
+        publishSites()
     }
 
     public func stop() {
@@ -133,7 +189,9 @@ public actor Poller {
 
     /// One round over all servers, in parallel.
     public func pollAll(now: Date) async {
+        lastFullRound = now
         let list = servers
+        let wantInterval = Int(refresh)
         let wanted = Dictionary(uniqueKeysWithValues: list.map { s in
             (s.id, Poller.targets(for: s, servers: list, sites: sites))
         })
@@ -141,7 +199,8 @@ public actor Poller {
             for s in list {
                 let push = pushedTargets[s.id] == wanted[s.id] ? nil : wanted[s.id]
                 group.addTask { [client, store] in
-                    (s, await Poller.poll(s, client: client, store: store, push: push, now: now))
+                    (s, await Poller.poll(s, client: client, store: store, push: push,
+                                          interval: wantInterval, now: now))
                 }
             }
             var out: [(ServerConfig, PollResult)] = []
@@ -185,9 +244,10 @@ public actor Poller {
         await refreshDomains(now: now)
     }
 
-    /// Builds each site's status from the agents that answered this round and
-    /// runs the site alert rules.
-    private func evaluateSites(fresh: Set<String>, macOffline: Bool, now: Date) async -> [AlertEvent] {
+    /// Builds each site's status from the agents that answered this round and,
+    /// when `alerts` is set, runs the site alert rules.
+    private func evaluateSites(fresh: Set<String>, macOffline: Bool, alerts: Bool = true,
+                               now: Date) async -> [AlertEvent] {
         var events: [AlertEvent] = []
         for site in sites {
             let origins = servers.filter { site.checked(from: $0) }.map { s in
@@ -200,7 +260,7 @@ public actor Poller {
             var st = SiteStatus(site: site, origins: origins, domain: domain, domainExpiry: entry?.expiry,
                                 domainError: entry?.error, alerts: [])
             let alertID = SiteStatus.alertID(site.id)
-            if !macOffline {
+            if alerts && !macOffline {
                 let ev = engine.process(id: alertID, name: site.name, conditions: SiteRules.conditions(st, now: now),
                                         reachable: true, now: now)
                 for e in ev { try? await store.addEvent(e) }
@@ -253,7 +313,7 @@ public actor Poller {
     }
 
     static func poll(_ s: ServerConfig, client: AgentClient, store: Store, push: [CheckTarget]? = nil,
-                     now: Date) async -> PollResult {
+                     interval: Int? = nil, now: Date) async -> PollResult {
         do {
             let since = (try? await store.lastSampleTime(s.id)) ?? now.addingTimeInterval(-firstBackfill)
             let history = try await client.history(s, since: since)
@@ -273,6 +333,10 @@ public actor Poller {
             }
             let snap = try await client.snapshot(s)
             try await store.setLatest(s.id, snap)
+            // Older agents report no interval and have no settings to change.
+            if let interval, let current = snap.intervalS, current != interval {
+                try? await client.setInterval(s, seconds: interval)
+            }
             return PollResult(snapshot: snap, error: nil, oldestNew: history.first?.time, pushed: pushed)
         } catch {
             let offline = (error as? URLError)?.code == .notConnectedToInternet

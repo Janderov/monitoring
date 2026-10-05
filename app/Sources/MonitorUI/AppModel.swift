@@ -82,6 +82,10 @@ public final class AppModel: ObservableObject {
 
     public func pollNow() async { await backend.pollNow() }
 
+    public func setRefreshInterval(_ seconds: TimeInterval) {
+        Task { await backend.setRefreshInterval(seconds) }
+    }
+
     /// Single permission check for every button. The rules live in the
     /// core's Access; today the only user is the owner.
     public func can(_ action: UserAction, _ server: ServerConfig? = nil) -> Bool {

@@ -59,6 +59,13 @@ public struct AgentClient: Sendable {
         try check(code, data)
     }
 
+    /// How often the agent samples ; the agent keeps it across restarts.
+    public func setInterval(_ server: ServerConfig, seconds: Int) async throws {
+        let body = try JSONEncoder().encode(["interval_s": seconds])
+        let (code, data) = try await transport.send(server, method: "PUT", path: "/v1/settings", body: body)
+        try check(code, data)
+    }
+
     private func get(_ server: ServerConfig, _ path: String) async throws -> Data {
         let (code, data) = try await transport.send(server, method: "GET", path: path, body: nil)
         try check(code, data)

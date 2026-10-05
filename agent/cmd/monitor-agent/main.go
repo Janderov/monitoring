@@ -30,6 +30,7 @@ import (
 	"github.com/Janderov/monitoring/agent/internal/docker"
 	"github.com/Janderov/monitoring/agent/internal/flows"
 	"github.com/Janderov/monitoring/agent/internal/links"
+	"github.com/Janderov/monitoring/agent/internal/pace"
 	"github.com/Janderov/monitoring/agent/internal/probe"
 	"github.com/Janderov/monitoring/agent/internal/server"
 	"github.com/Janderov/monitoring/agent/internal/tlsutil"
@@ -194,6 +195,12 @@ func cmdRun(args []string) error {
 		return err
 	}
 
+	// The Mac can change the interval at run time; see /v1/settings.
+	pc, err := pace.Open(filepath.Join(c.StateDir, "pace.json"), c.Interval.Duration)
+	if err != nil {
+		return err
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -203,18 +210,20 @@ func cmdRun(args []string) error {
 		procRoot:   c.ProcRoot,
 		services:   services,
 		checks:     checks,
-		budget:     c.Interval.Duration * 3 / 4,
+		pace:       pc,
 		listenPort: listenPort(c.Listen),
 		flowsFile:  flows.DefaultPath,
 		// The helper writes every 30 s; a few missed rounds mean it is gone.
 		flowsMaxAge: 3 * time.Minute,
 	}
-	ring := buffer.New(c.BufferSize)
-	go sampleLoop(ctx, s, ring, c.Interval.Duration)
+	// History stays one sample per minute however fast the agent samples,
+	// so buffer_size still means 24 h and the Mac's database does not grow.
+	ring := buffer.NewEvery(c.BufferSize, time.Minute)
+	go sampleLoop(ctx, s, ring)
 
 	srv := &http.Server{
 		Addr:              c.Listen,
-		Handler:           server.New(c.Token, ring, checks, version).Handler(),
+		Handler:           server.New(c.Token, ring, checks, pc, version).Handler(),
 		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -228,7 +237,7 @@ func cmdRun(args []string) error {
 		srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("monitor-agent %s listening on %s, sampling every %s", version, c.Listen, c.Interval.Duration)
+	log.Printf("monitor-agent %s listening on %s, sampling every %s", version, c.Listen, pc.Get())
 	if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -345,7 +354,7 @@ type sampler struct {
 	procRoot string
 	services []probe.ServiceSpec
 	checks   *probe.Store
-	budget   time.Duration // remote checks must finish within this
+	pace     *pace.Pace
 	// listenPort is the agents' own port: neighbour probes to it are not traffic.
 	listenPort int
 	// flowsFile is written by the root helper (monitor-agent flows).
@@ -372,7 +381,9 @@ func (s *sampler) linkSources(containers []collect.Container) []links.Source {
 
 func (s *sampler) sample(ctx context.Context) collect.Snapshot {
 	now := time.Now()
+	every := s.pace.Get()
 	snap := s.col.Sample(now)
+	snap.IntervalSeconds = int(every / time.Second)
 	if s.docker != nil && snap.Containers != nil {
 		snap.VPN = s.docker.VPN(snap.Containers, now)
 	}
@@ -382,15 +393,17 @@ func (s *sampler) sample(ctx context.Context) collect.Snapshot {
 		snap.Forwards, snap.Inbound = f.Forwards, f.Inbound
 	}
 	if targets := s.checks.Get(); len(targets) > 0 {
-		ctx, cancel := context.WithTimeout(ctx, s.budget)
+		// Remote checks must finish before the next sample is due.
+		ctx, cancel := context.WithTimeout(ctx, every*3/4)
 		snap.Checks = probe.Run(ctx, targets)
 		cancel()
 	}
 	return snap
 }
 
-// sampleLoop takes one snapshot immediately, then one per interval.
-func sampleLoop(ctx context.Context, s *sampler, ring *buffer.Ring, every time.Duration) {
+// sampleLoop takes one snapshot immediately, then one per interval, counted
+// start to start. A new interval from the Mac applies to the current wait.
+func sampleLoop(ctx context.Context, s *sampler, ring *buffer.Ring) {
 	// The first CPU, network and process rates need a previous sample; take a
 	// short warm-up sample so the first stored snapshot already has real rates.
 	s.col.Sample(time.Now())
@@ -400,18 +413,25 @@ func sampleLoop(ctx context.Context, s *sampler, ring *buffer.Ring, every time.D
 	case <-time.After(time.Second):
 	}
 
-	t := time.NewTicker(every)
-	defer t.Stop()
 	for {
+		start := time.Now()
 		snap := s.sample(ctx)
 		for _, e := range snap.Errors {
 			log.Printf("sample: %s", e)
 		}
 		ring.Add(snap)
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
+	wait:
+		for {
+			t := time.NewTimer(time.Until(start.Add(s.pace.Get())))
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return
+			case <-s.pace.Changed():
+				t.Stop()
+			case <-t.C:
+				break wait
+			}
 		}
 	}
 }

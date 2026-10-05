@@ -32,7 +32,7 @@ final class FakeAgent: AgentTransport, @unchecked Sendable {
         }
         if path == "/v1/health" { return (200, Data(#"{"status":"ok","version":"3-merge","agent_uptime_s":1}"#.utf8)) }
         if path == "/v1/snapshot" { return (200, try AgentJSON.encoder.encode(history.last!)) }
-        if method == "PUT", path == "/v1/checks" { return (200, body ?? Data()) }
+        if method == "PUT", path == "/v1/checks" || path == "/v1/settings" { return (200, body ?? Data()) }
         return (404, Data())
     }
 }
@@ -97,5 +97,62 @@ final class PollerTests: XCTestCase {
         XCTAssertEqual(out.statuses.first?.level, .ok)
         let logged = try await store.events()
         XCTAssertEqual(logged.count, 2)
+    }
+
+    func testFastRefreshBetweenFullRounds() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let agent = FakeAgent()
+        var snap = Fixtures.snapshot(time: t0)
+        snap.intervalS = 60
+        agent.history = [snap]
+        let store = try Store(path: dir.appendingPathComponent("m.sqlite").path)
+        let out = Collector()
+        let poller = Poller(client: AgentClient(transport: agent), store: store,
+                            onUpdate: { out.set($0) }, onEvents: { out.add($0) })
+        await poller.setServers([Fixtures.server])
+        await poller.setRefreshInterval(15)
+
+        // The first tick is a full round and asks the agent to sample faster.
+        let pause = await poller.tick(now: t0)
+        XCTAssertEqual(pause, 15)
+        XCTAssertTrue(agent.requests.contains("PUT /v1/settings"))
+
+        // In between: only the current snapshot, nothing stored.
+        var faster = Fixtures.snapshot(time: t0.addingTimeInterval(15))
+        faster.intervalS = 15
+        agent.history = [snap, faster]
+        let before = agent.requests.count
+        _ = await poller.tick(now: t0.addingTimeInterval(15))
+        XCTAssertEqual(Array(agent.requests.dropFirst(before)), ["GET /v1/snapshot"])
+        XCTAssertEqual(out.statuses.first?.snapshot?.time, faster.time)
+        let stored = try await store.samples("nl", from: t0.addingTimeInterval(-60), to: t0.addingTimeInterval(60))
+        XCTAssertEqual(stored.count, 1)
+
+        // A minute after the last full round comes the next one; the agent
+        // already samples at 15 s, so nothing is pushed.
+        let mark = agent.requests.count
+        _ = await poller.tick(now: t0.addingTimeInterval(60))
+        let full = Array(agent.requests.dropFirst(mark))
+        XCTAssertTrue(full.contains { $0.hasPrefix("GET /v1/history") })
+        XCTAssertFalse(full.contains("PUT /v1/settings"))
+    }
+
+    func testOldAgentGetsNoSettings() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let agent = FakeAgent()
+        agent.history = [Fixtures.snapshot(time: Date(timeIntervalSince1970: 1_790_000_000))]
+        let store = try Store(path: dir.appendingPathComponent("m.sqlite").path)
+        let poller = Poller(client: AgentClient(transport: agent), store: store,
+                            onUpdate: { _ in }, onEvents: { _ in })
+        await poller.setServers([Fixtures.server])
+        await poller.setRefreshInterval(10)
+        await poller.pollAll(now: Date(timeIntervalSince1970: 1_790_000_060))
+        XCTAssertFalse(agent.requests.contains("PUT /v1/settings"))
     }
 }
