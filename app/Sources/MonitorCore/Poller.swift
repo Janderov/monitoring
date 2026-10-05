@@ -41,16 +41,47 @@ public actor Poller {
     private var statuses: [String: ServerStatus] = [:]
     private var task: Task<Void, Never>?
 
+    private var sites: [SiteConfig] = []
+    private var siteStatuses: [String: SiteStatus] = [:]
+    /// Check targets each agent last accepted, so they are pushed only on change.
+    private var pushedTargets: [String: [CheckTarget]] = [:]
+    private let domains: DomainExpiry
+    private var domainsLoaded = false
+    private var onSites: (@Sendable ([SiteStatus]) -> Void)?
+
     private let onUpdate: @Sendable ([ServerStatus]) -> Void
     private let onEvents: @Sendable ([AlertEvent]) -> Void
 
     public init(client: AgentClient, store: Store,
+                domainLookup: DomainLookupTransport = NetworkDomainLookup(),
                 onUpdate: @escaping @Sendable ([ServerStatus]) -> Void,
                 onEvents: @escaping @Sendable ([AlertEvent]) -> Void) {
         self.client = client
         self.store = store
+        self.domains = DomainExpiry(transport: domainLookup)
         self.onUpdate = onUpdate
         self.onEvents = onEvents
+    }
+
+    /// Receives every site's status after each round.
+    public func setSitesHandler(_ handler: @escaping @Sendable ([SiteStatus]) -> Void) {
+        onSites = handler
+        handler(orderedSites())
+    }
+
+    /// Replaces the site list. The agents get the new check targets on the next round.
+    public func setSites(_ list: [SiteConfig]) {
+        let ids = Set(list.map(\.id))
+        siteStatuses = siteStatuses.filter { ids.contains($0.key) }
+        sites = list
+        engine.retain(serverIDs: Set(servers.map(\.id)).union(list.map { SiteStatus.alertID($0.id) }))
+        publishSites()
+    }
+
+    /// Convenience for servers.json: servers and sites together.
+    public func setConfig(_ file: ServersFile) async {
+        await setServers(file.servers)
+        setSites(file.sites ?? [])
     }
 
     /// Replaces the server list; data of removed servers is dropped.
@@ -60,7 +91,8 @@ public actor Poller {
             try? await store.forget(serverID: old.id)
             statuses[old.id] = nil
         }
-        engine.retain(serverIDs: ids)
+        engine.retain(serverIDs: ids.union(sites.map { SiteStatus.alertID($0.id) }))
+        pushedTargets = pushedTargets.filter { ids.contains($0.key) }
         servers = list
         for s in list {
             var st: ServerStatus
@@ -94,9 +126,15 @@ public actor Poller {
     /// One round over all servers, in parallel.
     public func pollAll(now: Date) async {
         let list = servers
+        let wanted = Dictionary(uniqueKeysWithValues: list.map { s in
+            (s.id, sites.filter { $0.checked(from: s) }.map { CheckTarget.http($0.checkID, url: $0.url) })
+        })
         let results = await withTaskGroup(of: (ServerConfig, PollResult).self) { group in
             for s in list {
-                group.addTask { [client, store] in (s, await Poller.poll(s, client: client, store: store, now: now)) }
+                let push = pushedTargets[s.id] == wanted[s.id] ? nil : wanted[s.id]
+                group.addTask { [client, store] in
+                    (s, await Poller.poll(s, client: client, store: store, push: push, now: now))
+                }
             }
             var out: [(ServerConfig, PollResult)] = []
             for await r in group { out.append(r) }
@@ -110,6 +148,7 @@ public actor Poller {
 
         var events: [AlertEvent] = []
         for (s, r) in results {
+            if let pushed = r.pushed { pushedTargets[s.id] = pushed }
             if !macOffline { try? await store.addPoll(s.id, at: now, ok: r.snapshot != nil, error: r.error) }
             let outcome: PollOutcome = r.snapshot.map { .snapshot($0) } ?? .failure(r.error ?? "нет ответа")
             if !macOffline {
@@ -130,9 +169,63 @@ public actor Poller {
         // Backfilled history can reach back hours: roll up from its oldest sample.
         let oldest = results.compactMap(\.1.oldestNew).min() ?? now
         try? await store.rollup(since: min(oldest, now.addingTimeInterval(-2 * 3600)), now: now)
+        events += await evaluateSites(fresh: Set(results.filter { $0.1.snapshot != nil }.map(\.0.id)),
+                                      macOffline: macOffline, now: now)
         publish()
+        publishSites()
         if !events.isEmpty { onEvents(events) }
+        await refreshDomains(now: now)
     }
+
+    /// Builds each site's status from the agents that answered this round and
+    /// runs the site alert rules.
+    private func evaluateSites(fresh: Set<String>, macOffline: Bool, now: Date) async -> [AlertEvent] {
+        var events: [AlertEvent] = []
+        for site in sites {
+            let origins = servers.filter { site.checked(from: $0) }.map { s in
+                SiteStatus.Origin(serverID: s.id, serverName: s.name,
+                                  check: fresh.contains(s.id)
+                                      ? statuses[s.id]?.snapshot?.checks?.first { $0.id == site.checkID } : nil)
+            }
+            let domain = site.host.flatMap(DomainName.registrable)
+            let entry = await domain.asyncFlatMap { await domains.entry($0) }
+            var st = SiteStatus(site: site, origins: origins, domain: domain, domainExpiry: entry?.expiry,
+                                domainError: entry?.error, alerts: [])
+            let alertID = SiteStatus.alertID(site.id)
+            if !macOffline {
+                let ev = engine.process(id: alertID, name: site.name, conditions: SiteRules.conditions(st, now: now),
+                                        reachable: true, now: now)
+                for e in ev { try? await store.addEvent(e) }
+                events += ev
+            }
+            st.alerts = engine.active(alertID)
+            siteStatuses[site.id] = st
+        }
+        return events
+    }
+
+    /// Looks up stale domain expiry dates in the background.
+    private func refreshDomains(now: Date) async {
+        if !domainsLoaded {
+            domainsLoaded = true
+            for (d, e) in (try? await store.domains()) ?? [:] { await domains.restore(d, e) }
+        }
+        let wanted = Set(sites.compactMap { $0.host.flatMap(DomainName.registrable) })
+        for d in await domains.due(wanted, now: now) {
+            Task { [domains, store] in
+                let entry = await domains.lookup(d, now: now)
+                try? await store.setDomain(d, entry)
+            }
+        }
+    }
+
+    public func currentSites() -> [SiteStatus] { orderedSites() }
+
+    private func orderedSites() -> [SiteStatus] {
+        sites.map { siteStatuses[$0.id] ?? SiteStatus(site: $0, origins: [], alerts: []) }
+    }
+
+    private func publishSites() { onSites?(orderedSites()) }
 
     public func current() -> [ServerStatus] { ordered() }
 
@@ -147,16 +240,23 @@ public actor Poller {
         var offline = false
         /// Oldest sample stored by this poll.
         var oldestNew: Date?
+        /// Check targets the agent accepted in this poll.
+        var pushed: [CheckTarget]?
     }
 
-    static func poll(_ s: ServerConfig, client: AgentClient, store: Store, now: Date) async -> PollResult {
+    static func poll(_ s: ServerConfig, client: AgentClient, store: Store, push: [CheckTarget]? = nil,
+                     now: Date) async -> PollResult {
         do {
             let since = (try? await store.lastSampleTime(s.id)) ?? now.addingTimeInterval(-firstBackfill)
             let history = try await client.history(s, since: since)
             try await store.addSamples(s.id, history)
+            try await store.addSiteSamples(serverID: s.id, history)
+            // A failed push is retried next round; it must not hide the server's metrics.
+            var pushed: [CheckTarget]?
+            if let push, (try? await client.setChecks(s, targets: push)) != nil { pushed = push }
             let snap = try await client.snapshot(s)
             try await store.setLatest(s.id, snap)
-            return PollResult(snapshot: snap, error: nil, oldestNew: history.first?.time)
+            return PollResult(snapshot: snap, error: nil, oldestNew: history.first?.time, pushed: pushed)
         } catch {
             let offline = (error as? URLError)?.code == .notConnectedToInternet
             return PollResult(snapshot: nil, error: describe(error), offline: offline)
@@ -178,6 +278,20 @@ public actor Poller {
             }
         }
         return String(describing: error)
+    }
+}
+
+extension Optional {
+    func asyncFlatMap<U>(_ f: (Wrapped) async -> U?) async -> U? {
+        guard let v = self else { return nil }
+        return await f(v)
+    }
+}
+
+extension SiteStatus {
+    public init(site: SiteConfig, origins: [Origin], alerts: [ActiveAlert]) {
+        self.init(site: site, origins: origins, domain: site.host.flatMap(DomainName.registrable),
+                  domainExpiry: nil, domainError: nil, alerts: alerts)
     }
 }
 

@@ -10,22 +10,24 @@ public struct Thresholds: Codable, Equatable, Sendable {
     public var memoryPercent: Double?
     /// Warn when a TLS certificate expires within this many days.
     public var tlsDays: Int?
+    /// Warn when a domain registration expires within this many days.
+    public var domainDays: Int?
 
     public init(diskPercent: Double? = nil, cpuPercent: Double? = nil, cpuMinutes: Int? = nil,
-                memoryPercent: Double? = nil, tlsDays: Int? = nil) {
+                memoryPercent: Double? = nil, tlsDays: Int? = nil, domainDays: Int? = nil) {
         self.diskPercent = diskPercent; self.cpuPercent = cpuPercent; self.cpuMinutes = cpuMinutes
-        self.memoryPercent = memoryPercent; self.tlsDays = tlsDays
+        self.memoryPercent = memoryPercent; self.tlsDays = tlsDays; self.domainDays = domainDays
     }
 
     public static let defaults = Thresholds(diskPercent: 90, cpuPercent: 90, cpuMinutes: 5,
-                                            memoryPercent: 90, tlsDays: 14)
+                                            memoryPercent: 90, tlsDays: 14, domainDays: 14)
 
     /// `self` with missing fields taken from `defaults`.
     public var resolved: Thresholds {
         let d = Thresholds.defaults
         return Thresholds(diskPercent: diskPercent ?? d.diskPercent, cpuPercent: cpuPercent ?? d.cpuPercent,
                           cpuMinutes: cpuMinutes ?? d.cpuMinutes, memoryPercent: memoryPercent ?? d.memoryPercent,
-                          tlsDays: tlsDays ?? d.tlsDays)
+                          tlsDays: tlsDays ?? d.tlsDays, domainDays: domainDays ?? d.domainDays)
     }
 }
 
@@ -107,7 +109,8 @@ public enum Rules {
             out.append(Condition(key: "ctr:\(c.name)", severity: .warning,
                                  message: "контейнер \(c.name) нездоров"))
         }
-        for c in s.checks ?? [] {
+        // Sites the app manages are judged across all countries by SiteRules.
+        for c in s.checks ?? [] where !c.id.hasPrefix(SiteConfig.checkPrefix) {
             if !c.ok {
                 out.append(Condition(key: "check:\(c.id)", severity: .critical,
                                      message: "\(c.target) недоступен: \(c.error ?? "HTTP \(c.statusCode ?? 0)")"))
@@ -182,16 +185,24 @@ public struct AlertEngine: Sendable {
     public init() {}
 
     public mutating func process(server: ServerConfig, outcome: PollOutcome, now: Date) -> [AlertEvent] {
-        let current = Rules.conditions(outcome, thresholds: server.thresholds, now: now)
-        var byKey = states[server.id] ?? [:]
-        var events: [AlertEvent] = []
-        func event(_ kind: AlertEvent.Kind, _ c: Condition) {
-            events.append(AlertEvent(serverID: server.id, serverName: server.name, key: c.key, kind: kind,
-                                     severity: c.severity, message: c.message, time: now))
-        }
-
         let reachable: Bool
         if case .snapshot = outcome { reachable = true } else { reachable = false }
+        return process(id: server.id, name: server.name,
+                       conditions: Rules.conditions(outcome, thresholds: server.thresholds, now: now),
+                       reachable: reachable, now: now)
+    }
+
+    /// The anti-spam state machine for any monitored object (a server, or a
+    /// site as `site:<id>`). With `reachable` false only "down" may change;
+    /// everything else keeps its state until the object is seen again.
+    public mutating func process(id: String, name: String, conditions current: [Condition],
+                                 reachable: Bool, now: Date) -> [AlertEvent] {
+        var byKey = states[id] ?? [:]
+        var events: [AlertEvent] = []
+        func event(_ kind: AlertEvent.Kind, _ c: Condition) {
+            events.append(AlertEvent(serverID: id, serverName: name, key: c.key, kind: kind,
+                                     severity: c.severity, message: c.message, time: now))
+        }
 
         for c in current {
             var st = byKey[c.key] ?? State(condition: c)
@@ -227,7 +238,7 @@ public struct AlertEngine: Sendable {
                 byKey[key] = st
             }
         }
-        states[server.id] = byKey
+        states[id] = byKey
         return events
     }
 

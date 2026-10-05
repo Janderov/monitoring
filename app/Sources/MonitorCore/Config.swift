@@ -50,10 +50,41 @@ public enum Fingerprint {
     }
 }
 
+/// A site checked from the agents (several countries) plus domain expiry from
+/// the Mac.
+public struct SiteConfig: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var url: String
+    public var group: String?
+    public var tags: [String]?
+    /// Server ids to check from; all servers when nil.
+    public var from: [String]?
+    public var thresholds: Thresholds?
+
+    public init(id: String, name: String, url: String, group: String? = nil, tags: [String]? = nil,
+                from: [String]? = nil, thresholds: Thresholds? = nil) {
+        self.id = id; self.name = name; self.url = url; self.group = group; self.tags = tags
+        self.from = from; self.thresholds = thresholds
+    }
+
+    /// Id of the agent check target for this site. The prefix marks targets
+    /// the app manages, so server rules leave them to the site rules.
+    public var checkID: String { SiteConfig.checkPrefix + id }
+    public static let checkPrefix = "site-"
+
+    public var host: String? { URL(string: url)?.host?.lowercased() }
+
+    public func checked(from server: ServerConfig) -> Bool { from?.contains(server.id) ?? true }
+}
+
 public struct ServersFile: Codable, Sendable {
     public var servers: [ServerConfig]
+    public var sites: [SiteConfig]?
 
-    public init(servers: [ServerConfig]) { self.servers = servers }
+    public init(servers: [ServerConfig], sites: [SiteConfig]? = nil) {
+        self.servers = servers; self.sites = sites
+    }
 
     public static func load(from url: URL) throws -> ServersFile {
         let file = try decode(Data(contentsOf: url))
@@ -84,6 +115,18 @@ public struct ServersFile: Codable, Sendable {
             }
             guard (1...65535).contains(s.port), !s.host.isEmpty else {
                 throw ConfigError("сервер \(s.id): неверный адрес или порт")
+            }
+        }
+        var siteIDs = Set<String>()
+        for site in sites ?? [] {
+            guard !site.id.isEmpty, siteIDs.insert(site.id).inserted else {
+                throw ConfigError("id сайта \"\(site.id)\" пустой или повторяется")
+            }
+            guard let u = URL(string: site.url), u.scheme == "https" || u.scheme == "http", u.host != nil else {
+                throw ConfigError("сайт \(site.id): адрес должен начинаться с https:// или http://")
+            }
+            for sid in site.from ?? [] where !ids.contains(sid) {
+                throw ConfigError("сайт \(site.id): в from указан неизвестный сервер \(sid)")
             }
         }
     }
