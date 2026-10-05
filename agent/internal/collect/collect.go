@@ -29,6 +29,7 @@ type Snapshot struct {
 	VPN           []VPN       `json:"vpn,omitempty"`
 	Services      []Service   `json:"services,omitempty"`
 	Checks        []Check     `json:"checks,omitempty"`
+	Links         []Link      `json:"links,omitempty"`
 	Errors        []string    `json:"errors,omitempty"`
 }
 

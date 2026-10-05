@@ -14,10 +14,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +28,7 @@ import (
 	"github.com/Janderov/monitoring/agent/internal/collect"
 	"github.com/Janderov/monitoring/agent/internal/config"
 	"github.com/Janderov/monitoring/agent/internal/docker"
+	"github.com/Janderov/monitoring/agent/internal/links"
 	"github.com/Janderov/monitoring/agent/internal/probe"
 	"github.com/Janderov/monitoring/agent/internal/server"
 	"github.com/Janderov/monitoring/agent/internal/tlsutil"
@@ -192,12 +195,13 @@ func cmdRun(args []string) error {
 	defer stop()
 
 	s := &sampler{
-		col:      collect.New(c.ProcRoot, listerOrNil(dk)),
-		docker:   dk,
-		procRoot: c.ProcRoot,
-		services: services,
-		checks:   checks,
-		budget:   c.Interval.Duration * 3 / 4,
+		col:        collect.New(c.ProcRoot, listerOrNil(dk)),
+		docker:     dk,
+		procRoot:   c.ProcRoot,
+		services:   services,
+		checks:     checks,
+		budget:     c.Interval.Duration * 3 / 4,
+		listenPort: listenPort(c.Listen),
 	}
 	ring := buffer.New(c.BufferSize)
 	go sampleLoop(ctx, s, ring, c.Interval.Duration)
@@ -236,6 +240,16 @@ func (handshakeFilter) Write(p []byte) (int, error) {
 	return os.Stderr.Write(p)
 }
 
+// listenPort extracts the port from a listen address such as ":9443".
+func listenPort(addr string) int {
+	_, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(p)
+	return n
+}
+
 // listerOrNil avoids handing collect a non-nil interface holding a nil pointer.
 func listerOrNil(dk *docker.Client) collect.ContainerLister {
 	if dk == nil {
@@ -253,6 +267,25 @@ type sampler struct {
 	services []probe.ServiceSpec
 	checks   *probe.Store
 	budget   time.Duration // remote checks must finish within this
+	// listenPort is the agents' own port: neighbour probes to it are not traffic.
+	listenPort int
+}
+
+// linkSources lists the host and every running container's network namespace.
+func (s *sampler) linkSources(containers []collect.Container) []links.Source {
+	src := []links.Source{{Label: "host", NetDir: filepath.Join(s.procRoot, "net")}}
+	if s.docker == nil {
+		return src
+	}
+	for _, ct := range containers {
+		if ct.State != "running" {
+			continue
+		}
+		if pid, err := s.docker.Pid(ct.ID); err == nil && pid > 0 {
+			src = append(src, links.Source{Label: ct.Name, NetDir: filepath.Join(s.procRoot, strconv.Itoa(pid), "net")})
+		}
+	}
+	return src
 }
 
 func (s *sampler) sample(ctx context.Context) collect.Snapshot {
@@ -262,6 +295,7 @@ func (s *sampler) sample(ctx context.Context) collect.Snapshot {
 		snap.VPN = s.docker.VPN(snap.Containers, now)
 	}
 	snap.Services = probe.Services(s.procRoot, s.services)
+	snap.Links = links.Collect(s.linkSources(snap.Containers), map[int]bool{s.listenPort: true})
 	if targets := s.checks.Get(); len(targets) > 0 {
 		ctx, cancel := context.WithTimeout(ctx, s.budget)
 		snap.Checks = probe.Run(ctx, targets)

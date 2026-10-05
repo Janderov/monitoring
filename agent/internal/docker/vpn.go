@@ -89,6 +89,12 @@ func parseWGDump(dump string, now time.Time) []collect.VPNPeer {
 		rx, _ := strconv.ParseUint(f[6], 10, 64)
 		tx, _ := strconv.ParseUint(f[7], 10, 64)
 		p := collect.VPNPeer{PublicKey: f[1], RxBytes: rx, TxBytes: tx}
+		if f[3] != "(none)" {
+			p.Endpoint = f[3]
+		}
+		if f[4] != "(none)" {
+			p.AllowedIPs = f[4]
+		}
 		if hs > 0 {
 			t := time.Unix(hs, 0).UTC()
 			p.LatestHandshake = &t
