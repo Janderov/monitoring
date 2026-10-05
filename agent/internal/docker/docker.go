@@ -1,0 +1,70 @@
+// Package docker lists containers through the Docker Engine API on a unix
+// socket, using only GET requests.
+package docker
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/Janderov/monitoring/agent/internal/collect"
+)
+
+type Client struct {
+	http *http.Client
+}
+
+func New(socket string) *Client {
+	tr := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", socket)
+		},
+	}
+	return &Client{http: &http.Client{Transport: tr, Timeout: 5 * time.Second}}
+}
+
+type apiContainer struct {
+	ID     string   `json:"Id"`
+	Names  []string `json:"Names"`
+	Image  string   `json:"Image"`
+	State  string   `json:"State"`
+	Status string   `json:"Status"`
+}
+
+// List returns all containers, running or not.
+func (c *Client) List() ([]collect.Container, error) {
+	resp, err := c.http.Get("http://docker/containers/json?all=1")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("docker API: %s", resp.Status)
+	}
+	var raw []apiContainer
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	return convert(raw), nil
+}
+
+func convert(raw []apiContainer) []collect.Container {
+	out := make([]collect.Container, 0, len(raw))
+	for _, r := range raw {
+		name := ""
+		if len(r.Names) > 0 {
+			name = strings.TrimPrefix(r.Names[0], "/")
+		}
+		id := r.ID
+		if len(id) > 12 {
+			id = id[:12]
+		}
+		out = append(out, collect.Container{ID: id, Name: name, Image: r.Image, State: r.State, Status: r.Status})
+	}
+	return out
+}
