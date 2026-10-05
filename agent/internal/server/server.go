@@ -93,7 +93,7 @@ type checksBody struct {
 }
 
 func (s *Server) getChecks(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, checksBody{Targets: s.checks.Get()})
+	writeJSON(w, http.StatusOK, checksBody{Targets: probe.Redacted(s.checks.Get())})
 }
 
 // putChecks replaces the list of sites and servers this agent probes. Results
@@ -110,7 +110,7 @@ func (s *Server) putChecks(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, checksBody{Targets: s.checks.Get()})
+	writeJSON(w, http.StatusOK, checksBody{Targets: probe.Redacted(s.checks.Get())})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

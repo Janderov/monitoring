@@ -85,9 +85,23 @@ public struct CheckTarget: Codable, Equatable, Sendable {
     public var url: String?
     public var host: String?
     public var port: Int?
+    /// Login for a site behind HTTP basic auth. Agents before this field
+    /// reject unknown keys, so it is sent only when set.
+    public var basicAuth: BasicAuth? = nil
 
-    public static func http(_ id: String, url: String) -> CheckTarget {
-        CheckTarget(id: id, kind: "http", url: url, host: nil, port: nil)
+    public struct BasicAuth: Codable, Equatable, Sendable {
+        public var user: String
+        public var password: String
+        public init(user: String, password: String) { self.user = user; self.password = password }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, kind, url, host, port
+        case basicAuth = "basic_auth"
+    }
+
+    public static func http(_ id: String, url: String, auth: BasicAuth? = nil) -> CheckTarget {
+        CheckTarget(id: id, kind: "http", url: url, host: nil, port: nil, basicAuth: auth)
     }
     public static func tcp(_ id: String, host: String, port: Int) -> CheckTarget {
         CheckTarget(id: id, kind: "tcp", url: nil, host: host, port: port)

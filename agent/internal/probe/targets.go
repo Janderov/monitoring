@@ -37,6 +37,25 @@ type Target struct {
 	Port int    `json:"port,omitempty"`
 	// TimeoutSeconds defaults to 10.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// BasicAuth logs in to a site behind HTTP basic auth ("http" only). The
+	// password is kept on disk (0600) but never sent back by the API.
+	BasicAuth *BasicAuth `json:"basic_auth,omitempty"`
+}
+
+type BasicAuth struct {
+	User     string `json:"user"`
+	Password string `json:"password,omitempty"`
+}
+
+// Redacted is the list as the API shows it: credentials without passwords.
+func Redacted(targets []Target) []Target {
+	out := append([]Target(nil), targets...)
+	for i := range out {
+		if out[i].BasicAuth != nil {
+			out[i].BasicAuth = &BasicAuth{User: out[i].BasicAuth.User}
+		}
+	}
+	return out
 }
 
 func (t Target) validate() error {
@@ -55,6 +74,9 @@ func (t Target) validate() error {
 		}
 	default:
 		return fmt.Errorf("target %s: kind must be http or tcp", t.ID)
+	}
+	if t.BasicAuth != nil && (t.Kind != "http" || t.BasicAuth.User == "") {
+		return fmt.Errorf("target %s: basic_auth needs an http target and a user", t.ID)
 	}
 	if t.TimeoutSeconds < 0 || t.TimeoutSeconds > 30 {
 		return fmt.Errorf("target %s: timeout_seconds must be 0-30", t.ID)
@@ -208,6 +230,10 @@ func probeHTTP(ctx context.Context, t Target) collect.Check {
 		return c
 	}
 	req.Header.Set("User-Agent", "monitor-agent")
+	if t.BasicAuth != nil {
+		req.SetBasicAuth(t.BasicAuth.User, t.BasicAuth.Password)
+		c.Auth = true
+	}
 	start := time.Now()
 	resp, err := httpClient.Do(req)
 	c.LatencyMs = ms(time.Since(start))
@@ -219,14 +245,18 @@ func probeHTTP(ctx context.Context, t Target) collect.Check {
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 
 	c.StatusCode = resp.StatusCode
-	// 401/403: the site is up and asks for a login.
-	c.OK = resp.StatusCode < 400 || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden
+	authStatus := resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden
+	// 401/403 without credentials: the site is up and asks for a login.
+	c.OK = resp.StatusCode < 400 || (authStatus && t.BasicAuth == nil)
 	if resp.TLS != nil && len(resp.TLS.PeerCertificates) > 0 {
 		exp := resp.TLS.PeerCertificates[0].NotAfter.UTC()
 		c.TLSExpiry = &exp
 	}
 	if !c.OK {
 		c.Error = resp.Status
+		if authStatus {
+			c.Error = "логин или пароль для проверки не подошли"
+		}
 	}
 	return c
 }
