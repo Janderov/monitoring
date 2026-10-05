@@ -149,7 +149,7 @@ public struct MenuBarContent: View {
             openMain()
         }) {
             StatusDot(level: site.level())
-            Text(site.name)
+            Text(site.name).lineLimit(1)
             Spacer(minLength: 6)
             Text(site.problem ?? site.averageLatency.map(Fmt.ms) ?? "—")
                 .font(.callout).foregroundStyle(.secondary).lineLimit(1).monospacedDigit()
