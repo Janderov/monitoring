@@ -26,6 +26,8 @@ public struct Snapshot: Codable, Equatable, Sendable {
     /// Connections coming in from public addresses, by source; `ports` are local.
     public var inbound: [Link]?
     public var errors: [String]?
+    /// How often the agent samples right now; nil from older agents.
+    public var intervalS: Int?
 
     public struct CPU: Codable, Equatable, Sendable {
         public var cores: Int

@@ -13,6 +13,8 @@ public protocol MonitorBackend: AnyObject, Sendable {
     /// Re-reads the server list and polls right away.
     func reload() async throws
     func pollNow() async
+    /// How often the screens refresh and the agents sample (Poller.refreshChoices).
+    func setRefreshInterval(_ seconds: TimeInterval) async
     func samples(_ serverID: String, from: Date, to: Date) async throws -> [Store.Sample]
     func hourly(_ serverID: String, from: Date, to: Date) async throws -> [Store.Hourly]
     func events(limit: Int, serverID: String?) async throws -> [Store.LoggedEvent]
@@ -82,6 +84,8 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
         self.poller = poller
         self.auditor = Auditor(store: store)
         await poller.setSitesHandler(onSites)
+        let saved = UserDefaults.standard.double(forKey: Poller.refreshDefaultsKey)
+        if saved > 0 { await poller.setRefreshInterval(saved) }
         await poller.start()
     }
 
@@ -94,6 +98,11 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
 
     public func pollNow() async {
         await poller?.pollAll(now: Date())
+    }
+
+    public func setRefreshInterval(_ seconds: TimeInterval) async {
+        UserDefaults.standard.set(seconds, forKey: Poller.refreshDefaultsKey)
+        await poller?.setRefreshInterval(seconds)
     }
 
     public func samples(_ serverID: String, from: Date, to: Date) async throws -> [Store.Sample] {

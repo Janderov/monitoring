@@ -2,6 +2,7 @@
 package server
 
 import (
+	"compress/gzip"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Janderov/monitoring/agent/internal/buffer"
+	"github.com/Janderov/monitoring/agent/internal/pace"
 	"github.com/Janderov/monitoring/agent/internal/probe"
 )
 
@@ -20,12 +22,13 @@ type Server struct {
 	token   []byte
 	ring    *buffer.Ring
 	checks  *probe.Store
+	pace    *pace.Pace
 	version string
 	started time.Time
 }
 
-func New(token string, ring *buffer.Ring, checks *probe.Store, version string) *Server {
-	return &Server{token: []byte(token), ring: ring, checks: checks, version: version, started: time.Now()}
+func New(token string, ring *buffer.Ring, checks *probe.Store, p *pace.Pace, version string) *Server {
+	return &Server{token: []byte(token), ring: ring, checks: checks, pace: p, version: version, started: time.Now()}
 }
 
 // Handler returns the API routes, all behind token authentication.
@@ -36,8 +39,33 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/history", s.history)
 	mux.HandleFunc("GET /v1/checks", s.getChecks)
 	mux.HandleFunc("PUT /v1/checks", s.putChecks)
-	return s.auth(mux)
+	mux.HandleFunc("GET /v1/settings", s.getSettings)
+	mux.HandleFunc("PUT /v1/settings", s.putSettings)
+	return compress(s.auth(mux))
 }
+
+// compress gzips responses for clients that accept it (URLSession does):
+// snapshots are repetitive JSON and shrink several times.
+func compress(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Accept-Encoding")
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+		next.ServeHTTP(gzipWriter{ResponseWriter: w, w: gz}, r)
+	})
+}
+
+type gzipWriter struct {
+	http.ResponseWriter
+	w *gzip.Writer
+}
+
+func (g gzipWriter) Write(b []byte) (int, error) { return g.w.Write(b) }
 
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +139,32 @@ func (s *Server) putChecks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, checksBody{Targets: probe.Redacted(s.checks.Get())})
+}
+
+type settingsBody struct {
+	// IntervalSeconds is how often the agent samples; 0 in a PUT returns to
+	// the config file's value.
+	IntervalSeconds int `json:"interval_s"`
+}
+
+func (s *Server) getSettings(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, settingsBody{IntervalSeconds: int(s.pace.Get() / time.Second)})
+}
+
+// putSettings changes the sampling interval; the next sample follows the new one.
+func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
+	var body settingsBody
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if err := s.pace.Set(time.Duration(body.IntervalSeconds) * time.Second); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.getSettings(w, r)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

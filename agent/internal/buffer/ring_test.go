@@ -77,3 +77,23 @@ func TestExactlyFull(t *testing.T) {
 		t.Errorf("Latest = %v, want 3", l.Time.Unix())
 	}
 }
+
+func TestEveryKeepsOnePerStep(t *testing.T) {
+	r := NewEvery(10, time.Minute)
+	for sec := 0; sec <= 150; sec += 15 {
+		r.Add(at(sec))
+	}
+	if got, want := secs(r.Since(time.Time{}, 0)), []int64{0, 60, 120}; !equal(got, want) {
+		t.Errorf("history = %v, want %v", got, want)
+	}
+	if l, ok := r.Latest(); !ok || l.Time.Unix() != 150 {
+		t.Errorf("Latest = %v, %v; want 150", l.Time.Unix(), ok)
+	}
+	// Slightly early ticks still count as the next minute.
+	r = NewEvery(10, time.Minute)
+	r.Add(at(0))
+	r.Add(at(59))
+	if got := secs(r.Since(time.Time{}, 0)); !equal(got, []int64{0, 59}) {
+		t.Errorf("history = %v, want [0 59]", got)
+	}
+}
