@@ -10,21 +10,21 @@ final class RoutesTests: XCTestCase {
     func testForwardedAndInbound() {
         // NL forwards client traffic (NAT) to the US; RU sees US connecting in.
         var nl = Fixtures.snapshot()
-        nl.forwards = [.init(remoteIp: "149.28.225.248", ports: [443], protos: ["tcp"], connections: 12,
+        nl.forwards = [.init(remoteIp: "192.0.2.130", ports: [443], protos: ["tcp"], connections: 12,
                              via: ["nat:host"]),
                        .init(remoteIp: "142.250.1.1", ports: [443], protos: ["udp"], connections: 40,
                              via: ["nat:host"])]
         var us = Fixtures.snapshot()
         // The US also sees NL coming in: the same traffic, counted once.
-        us.inbound = [.init(remoteIp: "103.54.19.175", ports: [443], protos: ["tcp"], connections: 10, via: ["host"]),
-                      .init(remoteIp: "155.212.164.127", ports: [22, 9443], protos: ["tcp"], connections: 1,
+        us.inbound = [.init(remoteIp: "192.0.2.110", ports: [443], protos: ["tcp"], connections: 10, via: ["host"]),
+                      .init(remoteIp: "192.0.2.121", ports: [22, 9443], protos: ["tcp"], connections: 1,
                             via: ["host"])]
         var ru = Fixtures.snapshot()
-        ru.inbound = [.init(remoteIp: "149.28.225.248", ports: [8443], protos: ["tcp"], connections: 3, via: ["host"])]
+        ru.inbound = [.init(remoteIp: "192.0.2.130", ports: [8443], protos: ["tcp"], connections: 3, via: ["host"])]
         let statuses = [
-            ServerStatus(server: server("nl", "103.54.19.175"), snapshot: nl, lastSeen: nil, error: nil, alerts: []),
-            ServerStatus(server: server("ru", "155.212.164.127"), snapshot: ru, lastSeen: nil, error: nil, alerts: []),
-            ServerStatus(server: server("us", "149.28.225.248"), snapshot: us, lastSeen: nil, error: nil, alerts: []),
+            ServerStatus(server: server("nl", "192.0.2.110"), snapshot: nl, lastSeen: nil, error: nil, alerts: []),
+            ServerStatus(server: server("ru", "192.0.2.121"), snapshot: ru, lastSeen: nil, error: nil, alerts: []),
+            ServerStatus(server: server("us", "192.0.2.130"), snapshot: us, lastSeen: nil, error: nil, alerts: []),
         ]
         let routes = VPNRoutes.compute(statuses)
         XCTAssertEqual(routes.map(\.id), ["nl->us", "us->ru"])
@@ -37,22 +37,22 @@ final class RoutesTests: XCTestCase {
         var nl = Fixtures.snapshot()
         // Entry NL: a WireGuard peer that routes everything to the US server...
         nl.vpn![0].peers!.append(.init(name: nil, publicKey: "US=", latestHandshake: nil, active: true,
-                                       rxBytes: 1, txBytes: 2, endpoint: "149.28.225.248:51820",
+                                       rxBytes: 1, txBytes: 2, endpoint: "192.0.2.130:51820",
                                        allowedIps: "0.0.0.0/0, ::/0"))
         // ...plus a client whose endpoint happens to be the RU server: not a cascade.
         nl.vpn![0].peers!.append(.init(name: nil, publicKey: "C=", latestHandshake: nil, active: true,
-                                       rxBytes: 1, txBytes: 2, endpoint: "155.212.164.127:40000",
+                                       rxBytes: 1, txBytes: 2, endpoint: "192.0.2.121:40000",
                                        allowedIps: "10.8.1.9/32"))
         var ru = Fixtures.snapshot()
         ru.links = [
-            .init(remoteIp: "103.54.19.175", ports: [443], protos: ["tcp"], connections: 4, via: ["amnezia-xray"]),
-            .init(remoteIp: "149.28.225.248", ports: [22, 9443], protos: ["tcp"], connections: 1, via: ["host"]),
+            .init(remoteIp: "192.0.2.110", ports: [443], protos: ["tcp"], connections: 4, via: ["amnezia-xray"]),
+            .init(remoteIp: "192.0.2.130", ports: [22, 9443], protos: ["tcp"], connections: 1, via: ["host"]),
             .init(remoteIp: "8.8.8.8", ports: [53], protos: ["udp"], connections: 1, via: ["host"]),
         ]
         let statuses = [
-            ServerStatus(server: server("nl", "103.54.19.175"), snapshot: nl, lastSeen: nil, error: nil, alerts: []),
-            ServerStatus(server: server("ru", "155.212.164.127"), snapshot: ru, lastSeen: nil, error: nil, alerts: []),
-            ServerStatus(server: server("us", "149.28.225.248"), snapshot: nil, lastSeen: nil, error: nil, alerts: []),
+            ServerStatus(server: server("nl", "192.0.2.110"), snapshot: nl, lastSeen: nil, error: nil, alerts: []),
+            ServerStatus(server: server("ru", "192.0.2.121"), snapshot: ru, lastSeen: nil, error: nil, alerts: []),
+            ServerStatus(server: server("us", "192.0.2.130"), snapshot: nil, lastSeen: nil, error: nil, alerts: []),
         ]
         let routes = VPNRoutes.compute(statuses)
         XCTAssertEqual(routes.map(\.id), ["nl->us", "ru->nl"])

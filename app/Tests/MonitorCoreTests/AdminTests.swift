@@ -111,7 +111,7 @@ final class ConfigRepositoryTests: XCTestCase {
 
     func testNewIDs() {
         let file = ServersFile(servers: [Fixtures.server], sites: [SiteConfig(id: "shop", name: "", url: "")])
-        XCTAssertEqual(file.newServerID(from: "155.212.164.127"), "155-212-164-127")
+        XCTAssertEqual(file.newServerID(from: "192.0.2.121"), "192-0-2-121")
         XCTAssertEqual(file.newServerID(from: "Нидерланды"), "srv")
         XCTAssertEqual(file.newServerID(from: "NL"), "nl-2")
         XCTAssertEqual(file.newSiteID(from: "shop"), "shop-2")
@@ -123,11 +123,11 @@ final class SSHConfigTests: XCTestCase {
     Host *
       ServerAliveInterval 30
     Host us vultr-us
-      HostName 149.28.225.248
+      HostName 192.0.2.130
       User root
-      IdentityFile ~/.ssh/id_ed25519_arpm
-    Host wise1
-      HostName=155.212.164.127
+      IdentityFile ~/.ssh/id_ed25519_work
+    Host ru1
+      HostName=192.0.2.121
       Port 2222
     Match host foo
       User nobody
@@ -135,18 +135,18 @@ final class SSHConfigTests: XCTestCase {
 
     func testParse() {
         let e = SSHConfigFile.parse(config)
-        XCTAssertEqual(e.map(\.alias), ["us", "vultr-us", "wise1"])
-        XCTAssertEqual(e[0].identityFile, "~/.ssh/id_ed25519_arpm")
+        XCTAssertEqual(e.map(\.alias), ["us", "vultr-us", "ru1"])
+        XCTAssertEqual(e[0].identityFile, "~/.ssh/id_ed25519_work")
         XCTAssertEqual(e[2].port, 2222)
-        XCTAssertEqual(e[2].hostName, "155.212.164.127")
+        XCTAssertEqual(e[2].hostName, "192.0.2.121")
     }
 
     func testTargetForTypedHost() {
         let e = SSHConfigFile.parse(config)
-        let byIP = SSHConfigFile.target(forHost: "149.28.225.248", entries: e)
-        XCTAssertEqual(byIP.identityFile, "~/.ssh/id_ed25519_arpm")
+        let byIP = SSHConfigFile.target(forHost: "192.0.2.130", entries: e)
+        XCTAssertEqual(byIP.identityFile, "~/.ssh/id_ed25519_work")
         XCTAssertEqual(byIP.user, "root")
-        XCTAssertEqual(SSHConfigFile.target(forHost: "wise1", entries: e).port, 2222)
+        XCTAssertEqual(SSHConfigFile.target(forHost: "ru1", entries: e).port, 2222)
         XCTAssertEqual(SSHConfigFile.target(forHost: "203.0.113.1", entries: e), SSHTarget(host: "203.0.113.1"))
         let opts = byIP.options()
         XCTAssertTrue(opts.contains("IdentitiesOnly=yes"))

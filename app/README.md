@@ -63,7 +63,7 @@ Actions, заменяет ею приложение на том же месте 
 
 ```json
   "sites": [
-    {"id": "biotech", "name": "Биотех", "url": "https://biotech.ru", "group": "Россия"},
+    {"id": "shop", "name": "Биотех", "url": "https://alpha-shop.ru", "group": "Россия"},
     {"id": "shop", "name": "Магазин", "url": "https://shop.example.com", "from": ["nl", "us"]}
   ]
 ```
