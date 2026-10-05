@@ -137,6 +137,10 @@ struct ServerContextMenu: View {
         if model.can(.installAgent, server), model.backend.canInstallAgent {
             Button("Переустановить агента…") { model.present(.reinstallAgent(server.id)) }
         }
+        if model.can(.restart, server) {
+            Divider()
+            Button("Перезагрузить сервер…") { model.present(.rebootServer(server.id)) }
+        }
     }
 }
 #endif

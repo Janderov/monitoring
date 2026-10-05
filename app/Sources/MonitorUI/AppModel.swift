@@ -158,6 +158,8 @@ public final class AppModel: ObservableObject {
 
 public enum EditSheet: Identifiable, Hashable, Sendable {
     case addServer, editServer(String), reinstallAgent(String), updateAgents, addSite, editSite(String)
+    /// Server id and container name.
+    case restartContainer(String, String), rebootServer(String)
     public var id: String {
         switch self {
         case .addServer: return "add-server"
@@ -166,6 +168,8 @@ public enum EditSheet: Identifiable, Hashable, Sendable {
         case .updateAgents: return "update-agents"
         case .addSite: return "add-site"
         case .editSite(let id): return "site-\(id)"
+        case .restartContainer(let id, let c): return "restart-\(id)-\(c)"
+        case .rebootServer(let id): return "reboot-\(id)"
         }
     }
 }

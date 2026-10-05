@@ -24,7 +24,7 @@ enum Period: String, CaseIterable, Identifiable {
 
 struct ServerDetail: View {
     enum Tab: String, CaseIterable, Identifiable {
-        case metrics = "Метрики", services = "Сервисы", containers = "Контейнеры", vpn = "VPN",
+        case metrics = "Метрики", services = "Сервисы", containers = "Контейнеры", databases = "Базы данных", vpn = "VPN",
              processes = "Процессы", checks = "Проверки", events = "События"
         var id: String { rawValue }
     }
@@ -134,7 +134,8 @@ struct ServerDetail: View {
         switch tab {
         case .metrics: MetricsTab(model: model, status: status, period: period)
         case .services: ServicesTab(services: snap?.services ?? [])
-        case .containers: ContainersTab(containers: snap?.containers ?? [])
+        case .containers: ContainersTab(model: model, server: status.server, containers: snap?.containers ?? [])
+        case .databases: DatabasesTab(databases: snap?.databases)
         case .vpn: VPNTab(model: model, server: status.server, vpn: snap?.vpn ?? [], links: snap?.links ?? [])
         case .processes: ProcessesTab(processes: snap?.processes ?? [])
         case .checks: ChecksTab(model: model, checks: snap?.checks ?? [])
@@ -159,6 +160,8 @@ private struct MetricsTab: View {
     var period: Period
     @State private var points: [String: [ChartPoint]] = [:]
 
+    private var reloadKey: String { "\(status.id)|\(period.rawValue)|\(status.lastSeen?.timeIntervalSince1970 ?? 0)" }
+
     private var thresholds: Thresholds { status.server.thresholds?.resolved ?? Thresholds.defaults }
 
     var body: some View {
@@ -176,6 +179,10 @@ private struct MetricsTab: View {
                          legend: [LegendItem(name: "↓ входящий", color: .blue), LegendItem(name: "↑ исходящий", color: .primary)])
                 DisksBox(disks: status.snapshot?.disks ?? [], threshold: thresholds.diskPercent)
             }
+            GridRow {
+                LinkLatencyBox(model: model, serverID: status.id, period: period, reload: reloadKey)
+                    .gridCellColumns(2)
+            }
             if (status.snapshot?.vpn ?? []).contains(where: { $0.clientsKnown == true }) {
                 GridRow {
                     ChartBox(title: "VPN-клиенты онлайн", value: status.snapshot.map { "\($0.vpnActiveClients)" },
@@ -184,7 +191,7 @@ private struct MetricsTab: View {
                 }
             }
         }
-        .task(id: "\(status.id)|\(period.rawValue)|\(status.lastSeen?.timeIntervalSince1970 ?? 0)") { await load() }
+        .task(id: reloadKey) { await load() }
     }
 
     private func load() async {

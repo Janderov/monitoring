@@ -25,6 +25,12 @@ struct EditSheetView: View {
         case .editSite(let id):
             if let s = model.siteConfigs.first(where: { $0.id == id }) { SiteForm(model: model, original: s) }
             else { Missing(title: "Сайт уже удалён") }
+        case .restartContainer(let id, let container):
+            if let s = model.status(id) { RestartSheet(model: model, server: s.server, container: container) }
+            else { Missing(title: "Сервер уже удалён") }
+        case .rebootServer(let id):
+            if let s = model.status(id) { RestartSheet(model: model, server: s.server, container: nil) }
+            else { Missing(title: "Сервер уже удалён") }
         }
     }
 }
