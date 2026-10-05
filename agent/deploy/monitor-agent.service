@@ -1,0 +1,33 @@
+[Unit]
+Description=Monitoring agent (metrics over HTTPS for the Mac app)
+Documentation=https://github.com/Janderov/monitoring
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=monitor-agent
+Group=monitor-agent
+ExecStart=/usr/local/bin/monitor-agent run -config /etc/monitor-agent/config.json
+Restart=always
+RestartSec=5
+
+# The agent only reads system state; lock everything else down.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths=/etc/monitor-agent
+
+[Install]
+WantedBy=multi-user.target

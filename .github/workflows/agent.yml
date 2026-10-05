@@ -1,0 +1,28 @@
+name: agent
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["agent/**", ".github/workflows/agent.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: GOOS=darwin go vet ./...
+      - run: go test -race ./...
+      - name: build linux binaries
+        run: |
+          GOOS=linux GOARCH=amd64 go build -o /tmp/monitor-agent-amd64 ./cmd/monitor-agent
+          GOOS=linux GOARCH=arm64 go build -o /tmp/monitor-agent-arm64 ./cmd/monitor-agent
