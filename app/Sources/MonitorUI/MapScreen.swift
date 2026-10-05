@@ -173,7 +173,7 @@ struct MapScreen: View {
     private func hint(_ text: String) -> some View {
         Text(text)
             .font(.caption).foregroundStyle(.secondary)
-            .frame(maxWidth: 220, alignment: .leading)
+            .frame(width: 220, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
     }
 
