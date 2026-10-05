@@ -134,6 +134,8 @@ public struct Snapshot: Codable, Equatable, Sendable {
         public var latencyMs: Double
         public var tlsExpiry: Date?
         public var error: String?
+        /// The agent logged in with the site's credentials: a 401/403 is then a real failure.
+        public var auth: Bool? = nil
 
         /// HTTP answers that mean the site is up but asks for a login.
         public static let authStatuses: Set<Int> = [401, 403]
@@ -202,7 +204,8 @@ public enum AgentJSON {
 }
 
 extension Snapshot.Check {
-    /// Older agents count 401/403 as a failure; a site behind a password is up.
+    /// Older agents count 401/403 as a failure; a site behind a password is up,
+    /// unless the agent logged in with the site's credentials and was refused.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -213,7 +216,8 @@ extension Snapshot.Check {
         latencyMs = try c.decode(Double.self, forKey: .latencyMs)
         tlsExpiry = try c.decodeIfPresent(Date.self, forKey: .tlsExpiry)
         error = try c.decodeIfPresent(String.self, forKey: .error)
-        if !ok, let code = statusCode, Self.authStatuses.contains(code) {
+        auth = try c.decodeIfPresent(Bool.self, forKey: .auth)
+        if !ok, auth != true, let code = statusCode, Self.authStatuses.contains(code) {
             ok = true
             error = nil
         }

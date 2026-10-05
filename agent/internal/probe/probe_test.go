@@ -76,6 +76,9 @@ func TestRunHTTPAndTCP(t *testing.T) {
 	}))
 	defer bad.Close()
 	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u, p, ok := r.BasicAuth(); ok && u == "u" && p == "right" {
+			return
+		}
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer auth.Close()
@@ -92,6 +95,8 @@ func TestRunHTTPAndTCP(t *testing.T) {
 		{ID: "tcp-up", Kind: "tcp", Host: host, Port: p},
 		{ID: "tcp-down", Kind: "tcp", Host: "127.0.0.1", Port: 1, TimeoutSeconds: 1},
 		{ID: "auth", Kind: "http", URL: auth.URL},
+		{ID: "auth-ok", Kind: "http", URL: auth.URL, BasicAuth: &BasicAuth{User: "u", Password: "right"}},
+		{ID: "auth-bad", Kind: "http", URL: auth.URL, BasicAuth: &BasicAuth{User: "u", Password: "wrong"}},
 	})
 	if r := res[0]; !r.OK || r.StatusCode != 200 || r.TLSExpiry == nil || r.TLSExpiry.Before(time.Now()) {
 		t.Errorf("ok = %+v", r)
@@ -105,8 +110,15 @@ func TestRunHTTPAndTCP(t *testing.T) {
 	if res[3].OK || res[3].Error == "" {
 		t.Errorf("tcp-down = %+v", res[3])
 	}
-	if r := res[4]; !r.OK || r.StatusCode != 401 || r.Error != "" {
+	if r := res[4]; !r.OK || r.StatusCode != 401 || r.Error != "" || r.Auth {
 		t.Errorf("auth = %+v", r)
+	}
+	// With credentials the check gets past the login, and a rejected login is a failure.
+	if r := res[5]; !r.OK || r.StatusCode != 200 || !r.Auth {
+		t.Errorf("auth-ok = %+v", r)
+	}
+	if r := res[6]; r.OK || r.StatusCode != 401 || !r.Auth || r.Error == "" {
+		t.Errorf("auth-bad = %+v", r)
 	}
 }
 
