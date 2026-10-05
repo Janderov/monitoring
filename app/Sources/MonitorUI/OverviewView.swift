@@ -62,7 +62,7 @@ struct OverviewView: View {
                 Text("Проблем нет").foregroundStyle(.secondary)
             } else {
                 ProblemsTable(model: model)
-                    .frame(height: tableHeight(model.problems.count, max: 8))
+                    .fitRows(model.problems.count, max: 8)
             }
         }
     }
@@ -81,14 +81,19 @@ struct OverviewView: View {
                 TableColumn("CPU, 1 ч") { s in Sparkline(model: model, serverID: s.id, tick: s.lastSeen) }
                     .width(min: 120, ideal: 150)
                 TableColumn("CPU") { s in num(s.snapshot.map { Fmt.percent($0.cpu.usagePercent) }) }
+                    .width(min: 44, ideal: 54)
                 TableColumn("Память") { s in num(s.snapshot.map { Fmt.percent($0.memory.usedPercent) }) }
+                    .width(min: 52, ideal: 62)
                 TableColumn("Диск") { s in num(s.snapshot.map { Fmt.percent($0.maxDiskPercent) }) }
+                    .width(min: 44, ideal: 54)
                 TableColumn("Сеть ↓ / ↑") { s in
                     num(s.snapshot.map { "\(Fmt.rate($0.network.rxBytesPerSec)) / \(Fmt.rate($0.network.txBytesPerSec))" })
                 }
+                .width(min: 150, ideal: 180)
                 TableColumn("Аптайм") { s in num(s.snapshot.map { Fmt.duration($0.uptimeSeconds) }) }
+                    .width(min: 70, ideal: 90)
             }
-            .frame(height: tableHeight(model.statuses.count, max: 12))
+            .fitRows(model.statuses.count, max: 12)
             .contextMenu(forSelectionType: String.self) { _ in } primaryAction: { ids in
                 if let id = ids.first { model.show(server: id) }
             }
@@ -104,7 +109,7 @@ struct OverviewView: View {
                     Text("время ответа с каждого сервера").font(.caption).foregroundStyle(.secondary)
                 }
                 SitesTable(model: model, sites: sites, selection: .constant(nil))
-                    .frame(height: tableHeight(sites.count, max: 8))
+                    .fitRows(sites.count, max: 8)
             }
         }
     }
