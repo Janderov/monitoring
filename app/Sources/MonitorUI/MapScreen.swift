@@ -159,15 +159,11 @@ struct MapScreen: View {
         .fixedSize()
     }
 
-    /// Why there are no routes: old agents don't report connections yet.
+    /// Routes need agent 0.4+; an older agent and "no cascades" look the
+    /// same in the snapshot, so the hint names both.
     private var noRoutesReason: String? {
-        let polled = model.statuses.compactMap(\.snapshot)
-        if polled.isEmpty { return nil }
-        let old = model.statuses.filter { $0.snapshot != nil && $0.snapshot?.links == nil }.map(\.server.name)
-        if !old.isEmpty {
-            return "Нужен новый агент на: \(old.joined(separator: ", ")). Правый клик по серверу → «Переустановить агента…»."
-        }
-        return "Агенты не видят каскадов VPN между вашими серверами."
+        if model.statuses.allSatisfy({ $0.snapshot == nil }) { return nil }
+        return "Каскадов не видно. Если они настроены, переустановите агента на серверах: правый клик → «Переустановить агента…»."
     }
 
     private func hint(_ text: String) -> some View {
