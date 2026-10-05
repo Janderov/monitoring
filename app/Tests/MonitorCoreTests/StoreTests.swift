@@ -69,6 +69,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(events[0].kind, .fired)
         XCTAssertEqual(events[0].severity, .critical)
         XCTAssertEqual(events[0].message, "агент не отвечает")
+        XCTAssertEqual(events[0].actor, "system")
         let ruEvents = try await reopened.events(serverID: "ru")
         XCTAssertEqual(ruEvents.count, 0)
         // The old sample's hour is kept in hourly (1 year retention).

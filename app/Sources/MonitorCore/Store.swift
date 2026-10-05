@@ -45,6 +45,8 @@ public actor Store {
           key TEXT NOT NULL, kind TEXT NOT NULL, severity INTEGER NOT NULL, message TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
         """,
+        // Who caused an event: "system" for alerts; user ids once there are users.
+        "ALTER TABLE events ADD COLUMN actor TEXT NOT NULL DEFAULT 'system';",
     ]
 
     public static var schemaVersion: Int { migrations.count }
@@ -92,11 +94,11 @@ public actor Store {
                  error.map { .text($0) } ?? .null)
     }
 
-    public func addEvent(_ e: AlertEvent) throws {
+    public func addEvent(_ e: AlertEvent, actor: String = "system") throws {
         try db.prepare("""
-        INSERT INTO events (server_id, ts, key, kind, severity, message) VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO events (server_id, ts, key, kind, severity, message, actor) VALUES (?, ?, ?, ?, ?, ?, ?)
         """).run(.text(e.serverID), .int(Int64(e.time.timeIntervalSince1970)), .text(e.key),
-                 .text(e.kind.rawValue), .int(Int64(e.severity.rawValue)), .text(e.message))
+                 .text(e.kind.rawValue), .int(Int64(e.severity.rawValue)), .text(e.message), .text(actor))
     }
 
     /// Recomputes the hourly rows for every hour touched since `since`
@@ -198,17 +200,19 @@ public actor Store {
         public var kind: AlertEvent.Kind
         public var severity: Severity
         public var message: String
+        public var actor: String
     }
 
     public func events(limit: Int = 200, serverID: String? = nil) throws -> [LoggedEvent] {
         let st = try db.prepare("""
-        SELECT server_id, ts, key, kind, severity, message FROM events
+        SELECT server_id, ts, key, kind, severity, message, actor FROM events
         WHERE ?1 IS NULL OR server_id = ?1 ORDER BY ts DESC, id DESC LIMIT ?2
         """)
         return try st.rows(serverID.map { .text($0) } ?? .null, .int(Int64(limit))).map { r in
             LoggedEvent(serverID: r.text(0) ?? "", time: Date(timeIntervalSince1970: TimeInterval(r.int(1) ?? 0)),
                         key: r.text(2) ?? "", kind: AlertEvent.Kind(rawValue: r.text(3) ?? "") ?? .fired,
-                        severity: Severity(rawValue: Int(r.int(4) ?? 1)) ?? .warning, message: r.text(5) ?? "")
+                        severity: Severity(rawValue: Int(r.int(4) ?? 1)) ?? .warning, message: r.text(5) ?? "",
+                        actor: r.text(6) ?? "system")
         }
     }
 }
