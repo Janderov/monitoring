@@ -205,7 +205,7 @@ struct EventsList: View {
                     Table(rows) {
                         TableColumn("Время") { r in Text(Fmt.time(r.event.time)).monospacedDigit() }.width(min: 90, ideal: 110)
                         TableColumn("Важность") { r in kind(r.event) }.width(min: 110, ideal: 130)
-                        TableColumn("Сервер") { r in Text(model.status(r.event.serverID)?.server.name ?? r.event.serverID) }
+                        TableColumn("Сервер") { r in Text(model.objectName(r.event.serverID)) }
                             .width(min: 70, ideal: 100)
                         TableColumn("Что") { r in Text(r.event.message) }
                     }
