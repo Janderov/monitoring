@@ -1,0 +1,44 @@
+name: app
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    paths: ["app/**", ".github/workflows/app.yml"]
+
+jobs:
+  # The core (models, alert rules, SQLite, poller) is plain Swift and is
+  # tested on Linux, which is cheap and fast.
+  core-tests:
+    runs-on: ubuntu-latest
+    container: swift:6.0-noble
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update -qq && apt-get install -y -qq libsqlite3-dev
+      - run: swift test
+
+  # The menu bar app itself only builds on macOS.
+  macos-app:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: swift test
+      - name: build Monitor.app
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then v="$GITHUB_REF_NAME"; else v="dev-${HEAD_SHA::7}"; fi
+          scripts/build-app.sh "$v"
+          cd dist && ditto -c -k --keepParent Monitor.app Monitor.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Monitor-app
+          path: app/dist/Monitor.zip
