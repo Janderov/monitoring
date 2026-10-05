@@ -178,7 +178,7 @@ private struct MapInspector: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 StatusDot(level: s.level, size: 10)
-                Text(s.server.name).font(.headline)
+                Text(s.server.name).font(.headline).lineLimit(1)
                 Spacer()
             }
             Text([s.country?.name, s.server.group, s.server.host].compactMap { $0 }.joined(separator: " · "))
@@ -192,8 +192,8 @@ private struct MapInspector: View {
                     ForEach(reach) { l in
                         HStack {
                             StatusDot(level: l.check.ok ? .ok : .critical)
-                            Text(l.from.name)
-                            Spacer()
+                            Text(l.from.name).lineLimit(1)
+                            Spacer(minLength: 6)
                             Text(l.check.ok ? Fmt.ms(l.check.latencyMs) : "нет ответа")
                                 .foregroundStyle(l.check.ok ? Color.primary : Color.red).monospacedDigit()
                         }

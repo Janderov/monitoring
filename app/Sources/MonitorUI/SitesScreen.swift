@@ -74,7 +74,7 @@ private struct SiteDetail: View {
                         }
                         Text(site.url).foregroundStyle(.secondary).textSelection(.enabled)
                     }
-                    Spacer()
+                    Spacer(minLength: 8)
                     if let url = URL(string: site.url) {
                         Button("Открыть в браузере") { NSWorkspace.shared.open(url) }
                     }

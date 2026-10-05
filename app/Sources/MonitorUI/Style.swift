@@ -101,7 +101,7 @@ struct Fact: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).monospacedDigit()
+            Text(value).monospacedDigit().fixedSize(horizontal: false, vertical: true)
         }
     }
 }

@@ -32,7 +32,7 @@ public struct MainWindow: View {
                     }
                 }
         }
-        .frame(minWidth: 900, minHeight: 560)
+        .frame(minWidth: 1060, minHeight: 600)
     }
 
     @ViewBuilder private var detail: some View {

@@ -118,7 +118,8 @@ public struct MenuBarContent: View {
         HoverRow(action: { open(server: p.status.id) }) {
             StatusDot(level: p.alert.severity.level)
             VStack(alignment: .leading, spacing: 1) {
-                Text(p.status.server.name).fontWeight(.medium) + Text("  ") + Text(p.alert.message)
+                (Text(p.status.server.name).fontWeight(.medium) + Text("  ") + Text(p.alert.message))
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(Fmt.since(p.alert.since)).font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 6)
@@ -131,7 +132,7 @@ public struct MenuBarContent: View {
     private func serverRow(_ s: ServerStatus) -> some View {
         HoverRow(action: { open(server: s.id) }) {
             StatusDot(level: s.level)
-            Text(s.server.name)
+            Text(s.server.name).lineLimit(1)
             Spacer(minLength: 6)
             Text(s.keyFigure).font(.callout).foregroundStyle(.secondary).lineLimit(1).monospacedDigit()
         } hover: {

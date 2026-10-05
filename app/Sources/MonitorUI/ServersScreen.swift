@@ -12,7 +12,7 @@ struct ServersScreen: View {
     var body: some View {
         HSplitView {
             table
-                .frame(minWidth: 320, idealWidth: 420, maxWidth: 560)
+                .frame(minWidth: 360, idealWidth: 600, maxWidth: 640)
             Group {
                 if let id = model.selectedServerID, let s = model.status(id) {
                     ServerDetail(model: model, status: s)
@@ -59,9 +59,9 @@ struct ServersScreen: View {
                     Text(r.name)
                 }
             }
-            .width(min: 110, ideal: 140)
-            TableColumn("Группа", value: \.group) { r in Text(r.group).foregroundStyle(.secondary) }
-                .width(min: 50, ideal: 70)
+            .width(min: 110, ideal: 150)
+            TableColumn("Группа", value: \.group) { r in Text(r.group).foregroundStyle(.secondary).help(r.group) }
+                .width(min: 60, ideal: 96)
             TableColumn("CPU", value: \.cpu) { r in metric(r.cpu, warn: r.status.alerts.contains { $0.key.hasPrefix("cpu") }) }
                 .width(min: 44, ideal: 52)
             TableColumn("Память", value: \.mem) { r in metric(r.mem, warn: r.status.alerts.contains { $0.key.hasPrefix("mem") }) }
@@ -75,7 +75,7 @@ struct ServersScreen: View {
             TableColumn("Аптайм", value: \.uptime) { r in
                 Text(r.status.snapshot.map { Fmt.duration($0.uptimeSeconds) } ?? "—").foregroundStyle(.secondary).monospacedDigit()
             }
-            .width(min: 60, ideal: 72)
+            .width(min: 56, ideal: 64)
         }
         .contextMenu(forSelectionType: String.self) { ids in
             if let id = ids.first, let s = model.status(id) {

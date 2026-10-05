@@ -50,11 +50,12 @@ struct ServerDetail: View {
                     Label(e, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }
                 facts
-                Picker("Раздел", selection: $tab) {
-                    ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
+                // A segmented control cannot shrink below its labels, so a
+                // narrow pane gets a pop-up menu instead of clipping.
+                ViewThatFits(in: .horizontal) {
+                    tabPicker.pickerStyle(.segmented).fixedSize()
+                    tabPicker.pickerStyle(.menu).fixedSize()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
                 if tab == .metrics {
                     HStack {
                         Spacer()
@@ -71,6 +72,13 @@ struct ServerDetail: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var tabPicker: some View {
+        Picker("Раздел", selection: $tab) {
+            ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
+        }
+        .labelsHidden()
     }
 
     private var header: some View {
@@ -100,14 +108,14 @@ struct ServerDetail: View {
     private var subtitle: String {
         var parts = [status.server.host]
         if let c = status.country { parts.append(c.name) }
-        if let g = status.server.group, g != status.country?.code { parts.append(g) }
+        if let g = status.server.group, ![status.country?.code, status.country?.name].contains(g) { parts.append(g) }
         parts += status.server.tags ?? []
         return parts.joined(separator: " · ")
     }
 
     private var facts: some View {
         // Wraps onto more rows when the pane is narrow.
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 20, alignment: .leading)],
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 20, alignment: .leading)],
                   alignment: .leading, spacing: 10) {
             Group {
                 Fact(title: "Аптайм", value: snap.map { Fmt.duration($0.uptimeSeconds) } ?? "—")
@@ -228,19 +236,27 @@ struct ChartBox: View {
                 Text("Нет данных за период").font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
-                chart.frame(height: 120)
-            }
-        } label: {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title).font(.callout.weight(.semibold))
-                ForEach(legend, id: \.name) { item in
-                    HStack(spacing: 4) {
-                        RoundedRectangle(cornerRadius: 1).fill(item.color).frame(width: 12, height: 2)
-                        Text(item.name).font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    chart.frame(height: 120)
+                    if !legend.isEmpty {
+                        HStack(spacing: 12) {
+                            ForEach(legend, id: \.name) { item in
+                                HStack(spacing: 4) {
+                                    RoundedRectangle(cornerRadius: 1).fill(item.color).frame(width: 12, height: 2)
+                                    Text(item.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                        }
                     }
                 }
-                Spacer()
-                if let value { Text(value).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+            }
+        } label: {
+            // Title and value stack so a narrow pane never pushes the box wider.
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.callout.weight(.semibold)).lineLimit(1)
+                if let value {
+                    Text(value).font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                }
             }
         }
     }
@@ -300,17 +316,17 @@ private struct DisksBox: View {
                         let over = d.usedPercent >= (threshold ?? 90)
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text(d.mount).fontWeight(.medium)
-                                Text(d.fstype).foregroundStyle(.secondary)
-                                Spacer()
+                                Text(d.mount).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
+                                Text(d.fstype).foregroundStyle(.secondary).lineLimit(1)
+                                Spacer(minLength: 4)
                                 Text(Fmt.percent(d.usedPercent)).foregroundStyle(over ? Color.orange : Color.primary)
                                     .fontWeight(over ? .semibold : .regular)
-                                Text("· \(Fmt.bytes(d.freeBytes)) свободно из \(Fmt.bytes(d.totalBytes))")
-                                    .foregroundStyle(.secondary)
                             }
                             .font(.callout).monospacedDigit()
                             ProgressView(value: min(d.usedPercent, 100), total: 100)
                                 .tint(over ? .orange : .accentColor)
+                            Text("\(Fmt.bytes(d.freeBytes)) свободно из \(Fmt.bytes(d.totalBytes))")
+                                .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
                         }
                     }
                 }
