@@ -15,6 +15,9 @@ struct EditSheetView: View {
         case .editServer(let id):
             if let s = model.status(id) { ServerEditForm(model: model, original: s.server) }
             else { Missing(title: "Сервер уже удалён") }
+        case .reinstallAgent(let id):
+            if let s = model.status(id) { AddServerForm(model: model, reinstall: s.server) }
+            else { Missing(title: "Сервер уже удалён") }
         case .addSite:
             SiteForm(model: model, original: nil)
         case .editSite(let id):
@@ -265,6 +268,9 @@ struct ServerEditForm: View {
                         TextField("Порт агента", value: $port, format: .number.grouping(.never))
                         SecureField("Токен", text: $token, prompt: Text("оставьте пустым, чтобы не менять"))
                         TextField("Отпечаток", text: $fingerprint).font(.body.monospaced())
+                        if model.backend.canInstallAgent {
+                            Button("Переустановить агента по SSH…") { model.present(.reinstallAgent(original.id)) }
+                        }
                     }
                 }
                 if let error {
@@ -325,10 +331,14 @@ struct ServerEditForm: View {
 // MARK: - Server: add
 
 /// Two ways in: install the agent over SSH (step by step), or connect to an
-/// agent that is already running by its token and fingerprint.
+/// agent that is already running by its token and fingerprint. With
+/// `reinstall` it runs the SSH install again on a known server and keeps its
+/// id, name and history.
 struct AddServerForm: View {
     @ObservedObject var model: AppModel
+    var reinstall: ServerConfig?
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("sshUser.default") private var defaultUser = "root"
 
     enum Mode: Hashable { case install, existing }
     enum Auth: Hashable { case key, password }
@@ -339,12 +349,16 @@ struct AddServerForm: View {
     @State private var group = ""
     @State private var tags = ""
     // SSH
-    @State private var user = "root"
+    @State private var user = ""
     @State private var sshPort = 22
     @State private var auth: Auth = .key
     @State private var keyPath = ""
     @State private var password = ""
-    // Existing agent
+    @State private var rememberPassword = false
+    /// What ~/.ssh/config says about the typed host, shown under the fields.
+    @State private var fromConfig: String?
+    @State private var keys: [String] = []
+    // Agent
     @State private var agentPort = 9443
     @State private var token = ""
     @State private var fingerprint = ""
@@ -353,12 +367,10 @@ struct AddServerForm: View {
     @State private var showProgress = false
     @State private var steps: [InstallStep: StepState] = [:]
     @State private var error: String?
+    /// Saved only after "Всё равно добавить": the agent did not answer the Mac.
     @State private var unverified: ServerConfig?
 
-    enum StepState: Equatable { case running(String?), done(String?) }
-
     private var canInstall: Bool { model.backend.canInstallAgent }
-
     private var cleanToken: String { token.filter(\.isHexDigit) }
     private var cleanFingerprint: String { trimmed(fingerprint) }
 
@@ -366,7 +378,7 @@ struct AddServerForm: View {
         guard !trimmed(host).isEmpty else { return false }
         switch mode {
         case .install:
-            return canInstall && !trimmed(user).isEmpty && (auth == .key || !password.isEmpty)
+            return canInstall && (auth == .key || !password.isEmpty)
         case .existing:
             return cleanToken.count >= 32 && Fingerprint.bytes(cleanFingerprint) != nil
         }
@@ -380,48 +392,39 @@ struct AddServerForm: View {
         }
         .frame(width: 540)
         .frame(minHeight: 460)
-        .onAppear {
-            if !canInstall { mode = .existing }
-            keyPath = defaultKey() ?? ""
-        }
+        .onAppear(perform: prefill)
+        .onChange(of: host) { _ in if reinstall == nil { applySSHConfig() } }
     }
 
     // Page 1: where the server is and how to reach the agent.
     private var form: some View {
         Form {
-            Section {
-                TextField("Адрес", text: $host, prompt: Text("IP или домен"))
-                TextField("Название", text: $name, prompt: Text(trimmed(host).isEmpty ? "Как показывать в списке" : trimmed(host)))
-                TextField("Группа", text: $group, prompt: Text("например, Нидерланды"))
-                TextField("Теги", text: $tags, prompt: Text("через запятую"))
+            if let r = reinstall {
+                Section {
+                    LabeledContent("Сервер", value: r.name)
+                    LabeledContent("Адрес", value: r.host)
+                    Text("Агент обновится, токен и сертификат останутся прежними. История сервера сохранится.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Section {
+                    TextField("Адрес", text: $host, prompt: Text("IP, домен или имя из ~/.ssh/config"))
+                    TextField("Название", text: $name, prompt: Text(trimmed(host).isEmpty ? "Как показывать в списке" : trimmed(host)))
+                    TextField("Группа", text: $group, prompt: Text("например, Нидерланды"))
+                    TextField("Теги", text: $tags, prompt: Text("через запятую"))
+                }
             }
             Section {
-                Picker("Агент", selection: $mode) {
-                    Text("Установить по SSH").tag(Mode.install)
-                    Text("Уже установлен").tag(Mode.existing)
+                if reinstall == nil {
+                    Picker("Агент", selection: $mode) {
+                        Text("Установить по SSH").tag(Mode.install)
+                        Text("Уже установлен").tag(Mode.existing)
+                    }
+                    .pickerStyle(.segmented)
                 }
-                .pickerStyle(.segmented)
                 if mode == .install {
-                    if canInstall {
-                        TextField("Пользователь", text: $user)
-                        TextField("Порт SSH", value: $sshPort, format: .number.grouping(.never))
-                        Picker("Вход", selection: $auth) {
-                            Text("Ключ").tag(Auth.key)
-                            Text("Пароль").tag(Auth.password)
-                        }
-                        .pickerStyle(.radioGroup)
-                        if auth == .key {
-                            HStack {
-                                TextField("Ключ", text: $keyPath, prompt: Text("~/.ssh/id_ed25519"))
-                                Button("Выбрать…", action: pickKey)
-                            }
-                        } else {
-                            SecureField("Пароль", text: $password)
-                            Text("Пароль нужен только на время установки и нигде не сохраняется.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    } else {
-                        Text("Установка из приложения появится в следующем обновлении. Пока поставьте агента командой remote-install.sh и выберите «Уже установлен».")
+                    if canInstall { sshFields } else {
+                        Text("В этой сборке нет файлов агента. Соберите приложение скриптом build-app.sh или выберите «Уже установлен».")
                             .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
@@ -447,23 +450,58 @@ struct AddServerForm: View {
         .formStyle(.grouped)
     }
 
+    @ViewBuilder private var sshFields: some View {
+        TextField("Пользователь", text: $user, prompt: Text(defaultUser))
+        TextField("Порт SSH", value: $sshPort, format: .number.grouping(.never))
+        Picker("Вход", selection: $auth) {
+            Text("Ключ").tag(Auth.key)
+            Text("Пароль").tag(Auth.password)
+        }
+        .pickerStyle(.radioGroup)
+        if auth == .key {
+            HStack {
+                TextField("Ключ", text: $keyPath, prompt: Text("как в Терминале"))
+                Menu("Выбрать") {
+                    ForEach(keys, id: \.self) { k in Button(k) { keyPath = k } }
+                    if !keys.isEmpty { Divider() }
+                    Button("Другой файл…", action: pickKey)
+                    if !keyPath.isEmpty { Button("Как в Терминале") { keyPath = "" } }
+                }
+                .fixedSize()
+            }
+        } else {
+            SecureField("Пароль", text: $password)
+            Toggle("Запомнить в Связке ключей", isOn: $rememberPassword)
+            if !rememberPassword {
+                Text("Пароль нужен только на время установки и нигде не сохраняется.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        if let fromConfig {
+            Text(fromConfig).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        TextField("Порт агента", value: $agentPort, format: .number.grouping(.never))
+            .disabled(reinstall != nil)
+    }
+
     // Page 2: the install, one line per step.
     private var progress: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Установка на \(trimmed(host))").font(.headline)
-            ForEach(InstallStep.allCases) { step in
+            Text("\(reinstall == nil ? "Установка" : "Переустановка") на \(trimmed(host))").font(.headline)
+            ForEach(InstallStep.allCases, id: \.self) { step in
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     icon(steps[step]).frame(width: 16)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(step.rawValue).foregroundStyle(steps[step] == nil ? .secondary : .primary)
+                        Text(step.title).foregroundStyle(steps[step] == nil ? .secondary : .primary)
                         if let d = detail(steps[step]) {
                             Text(d).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
             }
             if let error {
-                AlertStrip(level: .critical, text: error, trailing: nil)
+                AlertStrip(level: unverified == nil ? .critical : .warning, text: error, trailing: nil)
             }
             Spacer()
         }
@@ -476,20 +514,23 @@ struct AddServerForm: View {
         case .none: Image(systemName: "circle").foregroundStyle(.tertiary)
         case .running: ProgressView().controlSize(.small)
         case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .skipped: Image(systemName: "minus.circle").foregroundStyle(.secondary)
+        case .failed: Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
         }
     }
 
     private func detail(_ s: StepState?) -> String? {
         switch s {
-        case .running(let d), .done(let d): return d
-        case .none: return nil
+        case .done(let d): return d
+        case .skipped(let d), .failed(let d): return d
+        case .running, .none: return nil
         }
     }
 
     private var buttons: some View {
         HStack {
             if showProgress && !running && error != nil {
-                Button("Назад") { showProgress = false; steps = [:] }
+                Button("Назад") { showProgress = false; steps = [:]; error = nil; unverified = nil }
             }
             Spacer()
             if running { ProgressView().controlSize(.small) }
@@ -497,10 +538,10 @@ struct AddServerForm: View {
                 .keyboardShortcut(.cancelAction)
                 .disabled(running && mode == .install)
             if let s = unverified, !running {
-                Button("Всё равно добавить") { add(s, verify: false) }
+                Button(reinstall == nil ? "Всё равно добавить" : "Всё равно сохранить") { add(s, verify: false) }
             }
             if !showProgress {
-                Button(mode == .install ? "Установить" : "Добавить", action: start)
+                Button(mode == .existing ? "Добавить" : reinstall == nil ? "Установить" : "Переустановить", action: start)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!ready || running)
             }
@@ -508,9 +549,41 @@ struct AddServerForm: View {
         .padding(16)
     }
 
-    private func newServer(token: String, fingerprint: String, port: Int) -> ServerConfig {
-        let h = trimmed(host)
-        return ServerConfig(id: UUID().uuidString.lowercased(), name: optional(name) ?? h, host: h, port: port,
+    private func prefill() {
+        keys = SSHKeys.list()
+        if !canInstall && reinstall == nil { mode = .existing }
+        guard let r = reinstall else { return }
+        host = r.host
+        name = r.name
+        group = r.group ?? ""
+        tags = (r.tags ?? []).joined(separator: ", ")
+        agentPort = r.port
+        applySSHConfig()
+        if let saved = model.backend.savedPassword(serverID: r.id) {
+            auth = .password
+            password = saved
+            rememberPassword = true
+        }
+    }
+
+    /// Fills user, port and key from ~/.ssh/config for the typed host, so a
+    /// server that needs a particular key works without picking it.
+    private func applySSHConfig() {
+        let t = SSHConfigFile.target(forHost: trimmed(host))
+        user = t.user ?? ""
+        sshPort = t.port ?? 22
+        keyPath = t.identityFile ?? ""
+        if t.user != nil || t.port != nil || t.identityFile != nil {
+            fromConfig = "Пользователь, порт и ключ взяты из ~/.ssh/config."
+        } else {
+            fromConfig = nil
+        }
+    }
+
+    private func newServer(token: String, fingerprint: String, address: String? = nil, port: Int) -> ServerConfig {
+        let h = address ?? trimmed(host)
+        let n = optional(name) ?? h
+        return ServerConfig(id: reinstall?.id ?? model.newServerID(from: n), name: n, host: h, port: port,
                             token: token, fingerprint: fingerprint, group: optional(group), tags: tagList(tags))
     }
 
@@ -542,6 +615,10 @@ struct AddServerForm: View {
                     }
                 }
                 try await model.save(server: server)
+                if auth == .password, mode == .install {
+                    try model.backend.setSavedPassword(rememberPassword ? password : nil, serverID: server.id)
+                }
+                password = ""
                 model.show(server: server.id)
                 dismiss()
             } catch {
@@ -552,34 +629,41 @@ struct AddServerForm: View {
     }
 
     private func install() {
-        let req = InstallRequest(host: trimmed(host), sshPort: sshPort, user: trimmed(user),
-                                 keyPath: auth == .key ? optional(keyPath) : nil,
-                                 password: auth == .password ? password : nil)
+        let target = SSHTarget(host: trimmed(host), port: sshPort, user: optional(user) ?? defaultUser,
+                               identityFile: auth == .key ? optional(keyPath) : nil)
+        let pass = auth == .password ? password : nil
+        let port = agentPort
+        let backend = model.backend
         showProgress = true
         running = true
         steps = [:]
+        // The installer reports from its own actor; the stream brings the
+        // steps back to the main thread for the view.
+        let (updates, sink) = AsyncStream<(InstallStep, StepState)>.makeStream()
+        Task {
+            for await (step, state) in updates { steps[step] = state }
+        }
         Task {
             do {
-                for try await update in model.backend.installAgent(req) {
-                    switch update {
-                    case .running(let step, let d): steps[step] = .running(d)
-                    case .done(let step, let d): steps[step] = .done(d)
-                    case .finished(let token, let fp):
-                        password = ""
-                        let server = newServer(token: token, fingerprint: fp, port: req.agentPort)
-                        try await model.save(server: server)
-                        model.show(server: server.id)
-                        running = false
-                        dismiss()
-                        return
-                    }
+                let result = try await backend.installAgent(target, password: pass, agentPort: port) { step, state in
+                    sink.yield((step, state))
                 }
-                error = "Установка закончилась без токена агента"
+                sink.finish()
+                let server = newServer(token: result.token, fingerprint: result.fingerprint,
+                                       address: result.host, port: result.port)
+                if result.verified {
+                    running = false
+                    add(server, verify: false)
+                } else {
+                    error = "Агент установлен, но Mac не достучался до него на порт \(result.port). Обычно это файрвол хостинга: откройте порт в панели провайдера."
+                    unverified = server
+                    running = false
+                }
             } catch {
+                sink.finish()
                 self.error = errorText(error)
+                running = false
             }
-            password = ""
-            running = false
         }
     }
 
@@ -589,15 +673,6 @@ struct AddServerForm: View {
         panel.showsHiddenFiles = true
         panel.canChooseDirectories = false
         if panel.runModal() == .OK, let url = panel.url { keyPath = url.path }
-    }
-
-    private func defaultKey() -> String? {
-        let ssh = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".ssh")
-        for name in ["id_ed25519", "id_ecdsa", "id_rsa"] {
-            let p = ssh.appendingPathComponent(name).path
-            if FileManager.default.fileExists(atPath: p) { return p }
-        }
-        return nil
     }
 }
 #endif

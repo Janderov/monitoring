@@ -134,6 +134,9 @@ struct ServerContextMenu: View {
             Divider()
             Button("Изменить…") { model.present(.editServer(server.id)) }
         }
+        if model.can(.installAgent, server), model.backend.canInstallAgent {
+            Button("Переустановить агента…") { model.present(.reinstallAgent(server.id)) }
+        }
     }
 }
 #endif

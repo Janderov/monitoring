@@ -108,6 +108,11 @@ public final class AppModel: ObservableObject {
     /// Opens the add/edit form in the main window (also from the menu bar).
     public func present(_ sheet: EditSheet) { self.sheet = sheet }
 
+    /// A short readable id for a new server, from its name or address.
+    public func newServerID(from text: String) -> String {
+        ServersFile(servers: statuses.map(\.server), sites: siteConfigs).newServerID(from: text)
+    }
+
     public func save(server: ServerConfig) async throws {
         try await backend.upsertServer(server)
         configError = nil
@@ -136,11 +141,12 @@ public final class AppModel: ObservableObject {
 }
 
 public enum EditSheet: Identifiable, Hashable, Sendable {
-    case addServer, editServer(String), addSite, editSite(String)
+    case addServer, editServer(String), reinstallAgent(String), addSite, editSite(String)
     public var id: String {
         switch self {
         case .addServer: return "add-server"
         case .editServer(let id): return "server-\(id)"
+        case .reinstallAgent(let id): return "reinstall-\(id)"
         case .addSite: return "add-site"
         case .editSite(let id): return "site-\(id)"
         }

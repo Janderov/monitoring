@@ -167,6 +167,10 @@ public struct MonitorCommands: Commands {
             }
             .keyboardShortcut("e")
             .disabled(model.selectedServerID == nil)
+            Button("Переустановить агента…") {
+                if let id = model.selectedServerID { model.present(.reinstallAgent(id)) }
+            }
+            .disabled(model.selectedServerID == nil || !model.backend.canInstallAgent)
         }
     }
 

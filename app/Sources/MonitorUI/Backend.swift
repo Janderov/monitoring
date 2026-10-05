@@ -25,45 +25,17 @@ public protocol MonitorBackend: AnyObject, Sendable {
     func upsertSite(_ site: SiteConfig) async throws
     func removeSite(id: String) async throws
 
-    /// False until the core can install the agent over SSH; the form then
+    /// False when this build has no agent files to upload; the form then
     /// offers only "the agent is already installed".
     var canInstallAgent: Bool { get }
-    func installAgent(_ request: InstallRequest) -> AsyncThrowingStream<InstallUpdate, Error>
-}
-
-/// Where and how to reach a new server over SSH. The password lives only in
-/// memory for the duration of the install.
-public struct InstallRequest: Sendable {
-    public var host: String
-    public var sshPort: Int
-    public var user: String
-    public var keyPath: String?
-    public var password: String?
-    public var agentPort: Int
-
-    public init(host: String, sshPort: Int = 22, user: String = "root", keyPath: String? = nil,
-                password: String? = nil, agentPort: Int = 9443) {
-        self.host = host; self.sshPort = sshPort; self.user = user
-        self.keyPath = keyPath; self.password = password; self.agentPort = agentPort
-    }
-}
-
-public enum InstallStep: String, CaseIterable, Identifiable, Sendable {
-    case connect = "Подключение по SSH"
-    case upload = "Загрузка агента"
-    case install = "Установка"
-    case start = "Запуск службы"
-    case firewall = "Открытие порта агента"
-    case identity = "Токен и отпечаток сертификата"
-    case verify = "Проверка связи с Mac"
-    public var id: String { rawValue }
-}
-
-public enum InstallUpdate: Sendable {
-    case running(InstallStep, detail: String?)
-    case done(InstallStep, detail: String?)
-    /// The agent is up; these go into the new server's config.
-    case finished(token: String, fingerprint: String)
+    /// Installs or upgrades the agent over SSH. `progress` is called off the
+    /// main thread. The password is used for this call only.
+    func installAgent(_ target: SSHTarget, password: String?, agentPort: Int,
+                      progress: @escaping @Sendable (InstallStep, StepState) -> Void) async throws -> InstallResult
+    /// SSH password the person chose to keep in Keychain for this server.
+    func savedPassword(serverID: String) -> String?
+    /// Nil forgets the saved password.
+    func setSavedPassword(_ password: String?, serverID: String) throws
 }
 
 public struct BackendError: LocalizedError {
@@ -77,9 +49,13 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
     private let notify: @Sendable ([AlertEvent]) -> Void
     private var store: Store?
     private var poller: Poller?
+    private let secrets: SecretStore
+    private let config: ConfigRepository
 
-    public init(notify: @escaping @Sendable ([AlertEvent]) -> Void) {
+    public init(notify: @escaping @Sendable ([AlertEvent]) -> Void, secrets: SecretStore = KeychainSecrets()) {
         self.notify = notify
+        self.secrets = secrets
+        self.config = ConfigRepository(secrets: secrets)
     }
 
     public func start(onUpdate: @escaping @Sendable ([ServerStatus]) -> Void,
@@ -96,7 +72,7 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
 
     public func reload() async throws {
         guard let poller else { return }
-        let file = try ServersFile.load(from: DataFolder.serversFile)
+        let file = try await config.load()
         await poller.setConfig(file)
         await poller.pollAll(now: Date())
     }
@@ -123,76 +99,46 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
 
     // MARK: Editing servers.json
 
+    // ConfigRepository keeps tokens in Keychain, validates and writes
+    // atomically with a .bak copy; the poller then gets the new list.
+
     public func upsertServer(_ server: ServerConfig) async throws {
-        try await edit { file in
-            if let i = file.servers.firstIndex(where: { $0.id == server.id }) { file.servers[i] = server }
-            else { file.servers.append(server) }
-        }
+        try await config.upsertServer(server)
+        try await reload()
     }
 
     public func removeServer(id: String) async throws {
-        try await edit { file in
-            file.servers.removeAll { $0.id == id }
-            // A site limited to this server would fail validation otherwise.
-            file.sites = file.sites?.map { site in
-                var s = site
-                s.from = s.from?.filter { $0 != id }
-                if s.from?.isEmpty == true { s.from = nil }
-                return s
-            }
-        }
+        try await config.removeServer(id: id)
+        try await reload()
     }
 
     public func upsertSite(_ site: SiteConfig) async throws {
-        try await edit { file in
-            var sites = file.sites ?? []
-            if let i = sites.firstIndex(where: { $0.id == site.id }) { sites[i] = site } else { sites.append(site) }
-            file.sites = sites
-        }
+        try await config.upsertSite(site)
+        try await reload()
     }
 
     public func removeSite(id: String) async throws {
-        try await edit { file in
-            file.sites?.removeAll { $0.id == id }
-        }
-    }
-
-    /// Read, change, validate, write atomically (owner-only), then apply.
-    private func edit(_ change: (inout ServersFile) -> Void) async throws {
-        var file: ServersFile
-        do {
-            file = try ServersFile.decode(Data(contentsOf: DataFolder.serversFile))
-        } catch CocoaError.fileReadNoSuchFile {
-            file = ServersFile(servers: [])
-        } catch {
-            throw BackendError("servers.json не читается, сначала исправьте его: \(error.localizedDescription)")
-        }
-        // The example written on first launch is not a real server.
-        file.servers.removeAll { $0.token.hasPrefix("PASTE") || $0.fingerprint.hasPrefix("PASTE") }
-        change(&file)
-        try file.validate()
-        let e = JSONEncoder()
-        e.keyEncodingStrategy = .convertToSnakeCase
-        e.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let data = try e.encode(file)
-        let url = DataFolder.serversFile
-        let fm = FileManager.default
-        if fm.fileExists(atPath: url.path) {
-            let backup = url.appendingPathExtension("bak")
-            try? fm.removeItem(at: backup)
-            try? fm.copyItem(at: url, to: backup)
-        }
-        try data.write(to: url, options: [.atomic])
-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try await config.removeSite(id: id)
         try await reload()
     }
 
     // MARK: Agent install
 
-    public var canInstallAgent: Bool { false }
+    public var canInstallAgent: Bool { AgentBundle.url != nil }
 
-    public func installAgent(_ request: InstallRequest) -> AsyncThrowingStream<InstallUpdate, Error> {
-        AsyncThrowingStream { $0.finish(throwing: BackendError("Установка из приложения пока не готова")) }
+    public func installAgent(_ target: SSHTarget, password: String?, agentPort: Int,
+                             progress: @escaping @Sendable (InstallStep, StepState) -> Void) async throws -> InstallResult {
+        let installer = AgentInstaller(client: AgentClient(transport: PinnedTransport()))
+        return try await installer.install(target, password: password, agentPort: agentPort, progress: progress)
+    }
+
+    public func savedPassword(serverID: String) -> String? {
+        try? secrets.get(SecretKey.sshPassword(serverID))
+    }
+
+    public func setSavedPassword(_ password: String?, serverID: String) throws {
+        let key = SecretKey.sshPassword(serverID)
+        if let password, !password.isEmpty { try secrets.set(password, for: key) } else { try secrets.remove(key) }
     }
 }
 
