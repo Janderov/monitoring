@@ -188,7 +188,7 @@ private struct SiteHistory: View {
                     .width(min: 70, ideal: 90)
                 TableColumn("Ошибка") { o in Text(o.check?.error ?? "").foregroundStyle(.secondary).lineLimit(1) }
             }
-            .frame(height: tableHeight(site.origins.count, max: 10))
+            .fitRows(site.origins.count, max: 10)
 
             GroupBox {
                 let points = buckets()

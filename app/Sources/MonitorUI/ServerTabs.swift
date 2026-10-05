@@ -3,8 +3,26 @@ import AppKit
 import MonitorCore
 import SwiftUI
 
-/// Tables inside the scrolling detail need an explicit height.
-func tableHeight(_ rows: Int, max: Int = 16) -> CGFloat { CGFloat(Swift.min(Swift.max(rows, 1), max)) * 24 + 32 }
+/// Tables inside a scrolling page need an explicit height: the header plus
+/// every row, so nothing is cut and there is no scroll inside the page.
+/// Only past `max` rows does the table scroll on its own.
+func tableHeight(_ rows: Int, max: Int = 16) -> CGFloat {
+    CGFloat(Swift.min(Swift.max(rows, 1), max)) * TableMetrics.row + TableMetrics.header
+}
+
+enum TableMetrics {
+    /// A row of the inset table style with its spacing; generous, since a
+    /// short gap below the last row is better than a clipped one.
+    static let row: CGFloat = 28
+    static let header: CGFloat = 34
+}
+
+extension View {
+    func fitRows(_ rows: Int, max: Int = 16) -> some View {
+        frame(height: tableHeight(rows, max: max))
+            .scrollDisabled(rows <= max)
+    }
+}
 
 struct ServicesTab: View {
     var services: [Snapshot.Service]
@@ -28,7 +46,7 @@ struct ServicesTab: View {
                 TableColumn("Задержка") { s in Text(s.latencyMs.map(Fmt.ms) ?? "—").monospacedDigit() }
                 TableColumn("Ошибка") { s in Text(s.error ?? "").foregroundStyle(.secondary) }
             }
-            .frame(height: tableHeight(services.count))
+            .fitRows(services.count)
         }
     }
 }
@@ -52,7 +70,7 @@ struct ContainersTab: View {
                 TableColumn("Health") { c in Text(c.health ?? "—") }
                 TableColumn("Статус") { c in Text(c.status).foregroundStyle(.secondary) }
             }
-            .frame(height: tableHeight(containers.count, max: 20))
+            .fitRows(containers.count, max: 20)
         }
     }
 }
@@ -75,7 +93,7 @@ struct ProcessesTab: View {
                 TableColumn("CPU") { p in Text(Fmt.percent(p.cpuPercent)).monospacedDigit() }.width(70)
                 TableColumn("Память") { p in Text(Fmt.bytes(p.rssBytes)).monospacedDigit() }.width(90)
             }
-            .frame(height: tableHeight(processes.count, max: 20))
+            .fitRows(processes.count, max: 20)
         }
     }
 }
@@ -113,7 +131,7 @@ struct VPNTab: View {
                         Text(v.clientsKnown == true ? "\(Fmt.bytes(v.rxBytes)) / \(Fmt.bytes(v.txBytes))" : "—").monospacedDigit()
                     }
                 }
-                .frame(height: tableHeight(vpn.count))
+                .fitRows(vpn.count)
 
                 ForEach(vpn.filter { !($0.peers ?? []).isEmpty || managed($0) }, id: \.container) { v in
                     VStack(alignment: .leading, spacing: 6) {
@@ -184,7 +202,7 @@ struct PeersTable: View {
                 }
             }
         }
-        .frame(height: tableHeight(peers.count, max: 24))
+        .fitRows(peers.count, max: 24)
         .confirmationDialog("Удалить ключ «\(confirm?.name ?? "")»?", isPresented: Binding(
             get: { confirm != nil }, set: { if !$0 { confirm = nil } })) {
             Button("Удалить", role: .destructive) {
@@ -248,7 +266,7 @@ struct ChecksTab: View {
                 TableColumn("SSL") { c in Text(c.tlsExpiry.map { "\(Fmt.days(until: $0)) д" } ?? "—").monospacedDigit() }
                 TableColumn("Ошибка") { c in Text(c.error ?? "").foregroundStyle(.secondary) }
             }
-            .frame(height: tableHeight(checks.count))
+            .fitRows(checks.count)
         }
     }
 
@@ -289,7 +307,7 @@ struct EventsList: View {
                         TableColumn("Важность") { r in kind(r.event) }.width(min: 110, ideal: 130)
                         TableColumn("Что") { r in Text(r.event.message) }
                     }
-                    .frame(height: tableHeight(events.count, max: 20))
+                    .fitRows(events.count, max: 20)
                 }
             }
         }
