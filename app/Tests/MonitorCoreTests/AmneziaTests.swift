@@ -122,6 +122,18 @@ final class AmneziaKeysTests: XCTestCase {
         XCTAssertTrue(ssh.conf.contains("PublicKey = CPUB="))
         XCTAssertFalse(ssh.conf.contains("CPRIV"), "the client's private key never lands on the server")
 
+        // The vpn:// link carries the same key for the AmneziaVPN app.
+        let json = try XCTUnwrap(AmneziaLinkTests.decode(try XCTUnwrap(new.amneziaLink)))
+        XCTAssertEqual(json["defaultContainer"] as? String, "amnezia-awg2")
+        XCTAssertEqual(json["description"] as? String, "NL")
+        let awg = try XCTUnwrap(((json["containers"] as? [[String: Any]])?.first)?["awg"] as? [String: Any])
+        XCTAssertEqual(awg["port"] as? String, "41234")
+        let last = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(try XCTUnwrap(awg["last_config"] as? String).utf8)) as? [String: Any])
+        XCTAssertEqual(last["client_priv_key"] as? String, "CPRIV=")
+        XCTAssertEqual(last["client_ip"] as? String, "10.8.1.3")
+        XCTAssertEqual(last["config"] as? String, new.config)
+
         let after = try await keys.list(container: "amnezia-awg2")
         XCTAssertEqual(after.last?.name, "iPhone Миши")
 
@@ -135,5 +147,39 @@ final class AmneziaKeysTests: XCTestCase {
     func testRejectsOddContainerName() async {
         let keys = AmneziaKeys(ssh: FakeAmneziaSSH(), target: SSHTarget(host: "h"), endpointHost: "h")
         do { _ = try await keys.list(container: "x; rm -rf /"); XCTFail() } catch {}
+    }
+}
+
+final class AmneziaLinkTests: XCTestCase {
+    /// Reverses the link: base64url, qCompress header, zlib stored blocks.
+    static func decode(_ link: String) throws -> [String: Any]? {
+        var b64 = String(link.dropFirst("vpn://".count))
+            .replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64 += "=" }
+        let bytes = [UInt8](try XCTUnwrap(Data(base64Encoded: b64)))
+        let size = Int(bytes[0]) << 24 | Int(bytes[1]) << 16 | Int(bytes[2]) << 8 | Int(bytes[3])
+        XCTAssertEqual(Array(bytes[4..<6]), [0x78, 0x01])
+        var i = 6, out: [UInt8] = []
+        while true {
+            let final = bytes[i] & 1
+            let len = Int(bytes[i + 1]) | Int(bytes[i + 2]) << 8
+            let nlen = Int(bytes[i + 3]) | Int(bytes[i + 4]) << 8
+            XCTAssertEqual(len ^ 0xFFFF, nlen)
+            out += bytes[(i + 5)..<(i + 5 + len)]
+            i += 5 + len
+            if final == 1 { break }
+        }
+        XCTAssertEqual(out.count, size)
+        let a = AmneziaLink.adler32(out)
+        XCTAssertEqual(Array(bytes[i..<(i + 4)]), [UInt8(a >> 24), UInt8(a >> 16 & 255), UInt8(a >> 8 & 255), UInt8(a & 255)])
+        return try JSONSerialization.jsonObject(with: Data(out)) as? [String: Any]
+    }
+
+    func testAdlerAndLargeInput() throws {
+        XCTAssertEqual(AmneziaLink.adler32(Array("Wikipedia".utf8)), 0x11E60398)
+        // More than one stored block.
+        let big = Data(repeating: 65, count: 70_000)
+        let z = AmneziaLink.qCompress(big)
+        XCTAssertEqual(z.count, 4 + 2 + (5 + 65535) + (5 + 4465) + 4)
     }
 }
