@@ -24,6 +24,7 @@ public final class AppModel: ObservableObject {
 
     public let backend: MonitorBackend
     public let locations: ServerLocations
+    public let updates: UpdateModel
 
     public var overall: ServerStatus.Level {
         if configError != nil { return .warning }
@@ -43,6 +44,7 @@ public final class AppModel: ObservableObject {
     public init(backend: MonitorBackend) {
         self.backend = backend
         self.locations = ServerLocations()
+        self.updates = UpdateModel(secrets: KeychainSecrets())
         Task { await start() }
     }
 

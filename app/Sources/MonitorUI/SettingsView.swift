@@ -12,6 +12,8 @@ public struct SettingsView: View {
         TabView {
             GeneralSettings(model: model)
                 .tabItem { Label("Основные", systemImage: "gearshape") }
+            UpdateSettings(updates: model.updates)
+                .tabItem { Label("Обновления", systemImage: "arrow.down.circle") }
             AccessSettings()
                 .tabItem { Label("Доступ", systemImage: "person.2") }
         }
@@ -55,6 +57,67 @@ private struct GeneralSettings: View {
         }
         .formStyle(.grouped)
         .frame(minHeight: 360)
+    }
+}
+
+/// Builds come from GitHub Actions of the private repo, so a read-only token
+/// is needed to download them.
+private struct UpdateSettings: View {
+    @ObservedObject var updates: UpdateModel
+    @State private var token = ""
+    @State private var error: String?
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("Сборка", value: AppUpdater.currentVersion)
+                HStack {
+                    Button("Проверить обновления") { Task { await updates.check() } }
+                        .disabled(!updates.hasToken || updates.busy)
+                    if updates.busy { ProgressView().controlSize(.small) }
+                    Spacer()
+                    if updates.available != nil {
+                        Button("Установить и перезапустить") { Task { await updates.install() } }
+                            .keyboardShortcut(.defaultAction)
+                    }
+                }
+                if !updates.statusText.isEmpty {
+                    Text(updates.statusText)
+                        .foregroundStyle(failed ? .red : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Section {
+                HStack {
+                    SecureField("Токен GitHub", text: $token,
+                                prompt: Text(updates.hasToken ? "сохранён в Связке ключей" : "github_pat_…"))
+                    Button("Сохранить") { save(token) }.disabled(token.isEmpty)
+                    if updates.hasToken { Button("Удалить") { save("") } }
+                }
+                if let error { Text(error).foregroundStyle(.red) }
+            } footer: {
+                Text("Fine-grained токен только для репозитория monitoring, права Actions и Contents только на чтение. Как его сделать, написано в README.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(minHeight: 360)
+    }
+
+    private var failed: Bool {
+        if case .failed = updates.state { return true }
+        return false
+    }
+
+    private func save(_ value: String) {
+        do {
+            try updates.setToken(value)
+            token = ""
+            error = nil
+            if updates.hasToken { Task { await updates.check() } }
+        } catch {
+            self.error = String(describing: error)
+        }
     }
 }
 
