@@ -4,8 +4,15 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths: ["app/**", "agent/**", ".github/workflows/app.yml"]
   pull_request:
     paths: ["app/**", "agent/**", ".github/workflows/app.yml"]
+
+# A newer push to the same PR or branch cancels the older run: Actions
+# minutes are limited, and macOS minutes count ten times.
+concurrency:
+  group: app-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # The core (models, alert rules, SQLite, poller) is plain Swift and is
@@ -30,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: swift --version
-      - run: swift test
+      # The core tests run on Linux above; here only the macOS-only build.
       # The app installs the agent over SSH, so it ships the Linux binaries.
       - uses: actions/setup-go@v5
         with:

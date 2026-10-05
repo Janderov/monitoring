@@ -67,6 +67,24 @@ public actor Store {
         CREATE INDEX actions_ts ON actions (ts);
         CREATE INDEX actions_object ON actions (object_id, ts);
         """,
+        // Before 401/403 counted as up, a site behind a password was logged
+        // as down: fix its availability and drop those alerts from the log.
+        """
+        UPDATE site_samples SET ok = 1, error = NULL WHERE ok = 0 AND status IN (401, 403);
+        DELETE FROM events WHERE message LIKE 'сайт % недоступен%'
+          AND (message LIKE '%: 401 %' OR message LIKE '%: 403 %' OR message LIKE '%HTTP 401' OR message LIKE '%HTTP 403');
+        """,
+        // Traffic of each VPN client per local day (1 year), from the agents'
+        // running counters; vpn_counters holds the last counter seen.
+        """
+        CREATE TABLE vpn_counters (
+          server_id TEXT NOT NULL, public_key TEXT NOT NULL, rx INTEGER NOT NULL, tx INTEGER NOT NULL,
+          PRIMARY KEY (server_id, public_key)) WITHOUT ROWID;
+        CREATE TABLE vpn_traffic (
+          server_id TEXT NOT NULL, public_key TEXT NOT NULL, day INTEGER NOT NULL,
+          rx INTEGER NOT NULL, tx INTEGER NOT NULL,
+          PRIMARY KEY (server_id, public_key, day)) WITHOUT ROWID;
+        """,
     ]
 
     public static var schemaVersion: Int { migrations.count }
@@ -118,6 +136,36 @@ public actor Store {
                            .int(Int64(time.timeIntervalSince1970)), .int(c.ok ? 1 : 0),
                            c.statusCode.map { .int(Int64($0)) } ?? .null, .real(c.latencyMs),
                            c.error.map { .text($0) } ?? .null)
+            }
+        }
+    }
+
+    /// Adds what each VPN client transferred since the previous call to its
+    /// day. Agents report counters that only grow until the VPN restarts; a
+    /// smaller counter means a restart, and then the whole value is new.
+    public func addVPNTraffic(_ serverID: String, _ snap: Snapshot, calendar: Calendar = .current) throws {
+        let peers = (snap.vpn ?? []).flatMap { $0.peers ?? [] }
+        guard !peers.isEmpty else { return }
+        let day = Int64(calendar.startOfDay(for: snap.time).timeIntervalSince1970)
+        try db.transaction {
+            let read = try db.prepare("SELECT rx, tx FROM vpn_counters WHERE server_id = ? AND public_key = ?")
+            let save = try db.prepare("INSERT OR REPLACE INTO vpn_counters (server_id, public_key, rx, tx) VALUES (?, ?, ?, ?)")
+            let add = try db.prepare("""
+            INSERT INTO vpn_traffic (server_id, public_key, day, rx, tx) VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT (server_id, public_key, day) DO UPDATE SET rx = rx + ?4, tx = tx + ?5
+            """)
+            for p in peers {
+                let rx = Int64(clamping: p.rxBytes), tx = Int64(clamping: p.txBytes)
+                if let prev = try read.rows(.text(serverID), .text(p.publicKey)).first {
+                    let prx = prev.int(0) ?? 0, ptx = prev.int(1) ?? 0
+                    let drx = rx >= prx ? rx - prx : rx, dtx = tx >= ptx ? tx - ptx : tx
+                    if drx > 0 || dtx > 0 {
+                        try add.run(.text(serverID), .text(p.publicKey), .int(day), .int(drx), .int(dtx))
+                    }
+                }
+                // A client seen for the first time only sets the starting point:
+                // its counter holds traffic from before the app watched it.
+                try save.run(.text(serverID), .text(p.publicKey), .int(rx), .int(tx))
             }
         }
     }
@@ -187,13 +235,14 @@ public actor Store {
             try db.prepare("DELETE FROM site_samples WHERE ts < ?").run(.int(sampleCut))
             try db.prepare("DELETE FROM hourly WHERE hour < ?").run(.int(hourlyCut))
             try db.prepare("DELETE FROM events WHERE ts < ?").run(.int(hourlyCut))
+            try db.prepare("DELETE FROM vpn_traffic WHERE day < ?").run(.int(hourlyCut))
         }
     }
 
     /// Drops everything about servers no longer in the config except the
     /// event log, which stays readable.
     public func forget(serverID: String) throws {
-        for table in ["samples", "hourly", "polls", "latest"] {
+        for table in ["samples", "hourly", "polls", "latest", "vpn_counters", "vpn_traffic"] {
             try db.prepare("DELETE FROM \(table) WHERE server_id = ?").run(.text(serverID))
         }
     }
@@ -249,6 +298,41 @@ public actor Store {
                            ok: r.int(2) == 1, statusCode: r.int(3).map { Int($0) }, latencyMs: r.real(4) ?? 0,
                            error: r.text(5))
             }
+    }
+
+    /// Bytes one VPN client transferred; rx is what the server received from
+    /// the client (its uploads), tx what it sent (its downloads).
+    public struct VPNUsage: Equatable, Sendable {
+        public var rx: UInt64
+        public var tx: UInt64
+        public var total: UInt64 { rx + tx }
+    }
+
+    /// Traffic per client public key over the local days touching [from, to].
+    public func vpnTraffic(_ serverID: String, from: Date, to: Date,
+                           calendar: Calendar = .current) throws -> [String: VPNUsage] {
+        let first = Int64(calendar.startOfDay(for: from).timeIntervalSince1970)
+        var out: [String: VPNUsage] = [:]
+        for r in try db.prepare("""
+        SELECT public_key, SUM(rx), SUM(tx) FROM vpn_traffic
+        WHERE server_id = ? AND day >= ? AND day <= ? GROUP BY public_key
+        """).rows(.text(serverID), .int(first), .int(Int64(to.timeIntervalSince1970))) {
+            out[r.text(0) ?? ""] = VPNUsage(rx: UInt64(max(0, r.int(1) ?? 0)), tx: UInt64(max(0, r.int(2) ?? 0)))
+        }
+        return out
+    }
+
+    /// Daily traffic of one client, oldest first, for a chart.
+    public func vpnDaily(_ serverID: String, publicKey: String, from: Date, to: Date,
+                         calendar: Calendar = .current) throws -> [(day: Date, usage: VPNUsage)] {
+        let first = Int64(calendar.startOfDay(for: from).timeIntervalSince1970)
+        return try db.prepare("""
+        SELECT day, rx, tx FROM vpn_traffic WHERE server_id = ? AND public_key = ? AND day >= ? AND day <= ?
+        ORDER BY day
+        """).rows(.text(serverID), .text(publicKey), .int(first), .int(Int64(to.timeIntervalSince1970))).map { r in
+            (Date(timeIntervalSince1970: TimeInterval(r.int(0) ?? 0)),
+             VPNUsage(rx: UInt64(max(0, r.int(1) ?? 0)), tx: UInt64(max(0, r.int(2) ?? 0))))
+        }
     }
 
     public struct Hourly: Equatable, Sendable {

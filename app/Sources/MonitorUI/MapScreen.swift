@@ -109,9 +109,8 @@ struct MapScreen: View {
         .task(id: showMac) {
             if showMac { await mac.run() }
         }
-        .task(id: hops.map(\.ip) + spots.map(\.ip)) {
-            await external.resolve(hops.map(\.ip) + Array(Set(spots.map(\.ip))).sorted())
-        }
+        .onChange(of: spots.map(\.ip), initial: true) { _, ips in external.request(ips, first: true) }
+        .onChange(of: hops.map(\.ip), initial: true) { _, ips in external.request(ips) }
         .onAppear {
             // Opening the map from a server's menu selects its pin.
             if let id = model.selectedServerID, let pin = pins.first(where: { $0.statuses.contains { $0.id == id } }) {

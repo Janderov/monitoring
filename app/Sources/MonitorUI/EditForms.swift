@@ -106,6 +106,8 @@ struct SiteForm: View {
     @State private var group = ""
     @State private var everywhere = true
     @State private var from: Set<String> = []
+    @State private var authUser = ""
+    @State private var authPassword = ""
     @State private var busy = false
     @State private var error: String?
     @State private var confirmDelete = false
@@ -126,6 +128,7 @@ struct SiteForm: View {
         if trimmed(url).isEmpty { return nil }
         if host == nil { return "Адрес вида https://example.ru" }
         if !everywhere && from.isEmpty { return "Выберите хотя бы один сервер" }
+        if !trimmed(authUser).isEmpty, authPassword.isEmpty, original?.authPassword == nil { return "Введите пароль для проверки" }
         if original == nil, model.siteConfigs.contains(where: { URL(string: $0.url)?.host?.lowercased() == host }) {
             return "Этот сайт уже есть в списке"
         }
@@ -162,6 +165,16 @@ struct SiteForm: View {
                     Text("Проверка раз в минуту: код ответа, время, SSL. Срок домена проверяется дважды в сутки.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Section {
+                    TextField("Логин", text: $authUser, prompt: Text("если сайт просит пароль"))
+                    SecureField("Пароль", text: $authPassword,
+                                prompt: Text(original?.authPassword == nil ? "" : "сохранён, введите новый, чтобы сменить"))
+                } header: {
+                    Text("Логин и пароль для проверки")
+                } footer: {
+                    Text("Без них проверка видит только окно входа и не заметит, если сам сайт за ним сломался. Пароль хранится в Связке ключей этого Mac и передаётся агентам по защищённому соединению.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
                 if let error {
                     Section { Text(error).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
                 }
@@ -175,7 +188,7 @@ struct SiteForm: View {
             }
         }
         .frame(width: 500)
-        .frame(minHeight: 380)
+        .frame(minHeight: 480)
         .onAppear(perform: load)
         .confirmationDialog("Удалить сайт «\(original?.name ?? "")»?", isPresented: $confirmDelete) {
             Button("Удалить", role: .destructive, action: remove)
@@ -193,6 +206,7 @@ struct SiteForm: View {
         name = o.name; url = o.url; group = o.group ?? ""
         everywhere = o.from == nil
         from = Set(o.from ?? [])
+        authUser = o.authUser ?? ""
     }
 
     private func save() {
@@ -202,6 +216,12 @@ struct SiteForm: View {
         site.url = normalizedURL
         site.group = optional(group)
         site.from = everywhere ? nil : model.statuses.map(\.id).filter { from.contains($0) }
+        site.authUser = optional(authUser)
+        if site.authUser == nil {
+            site.authPassword = nil
+        } else if !authPassword.isEmpty {
+            site.authPassword = authPassword
+        }
         run { try await model.save(site: site) }
     }
 

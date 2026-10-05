@@ -182,7 +182,7 @@ public actor Poller {
     /// What one agent probes: the sites it checks, and every other server's
     /// agent port, so the map shows who reaches whom.
     static func targets(for s: ServerConfig, servers: [ServerConfig], sites: [SiteConfig]) -> [CheckTarget] {
-        sites.filter { $0.checked(from: s) }.map { CheckTarget.http($0.checkID, url: $0.url) }
+        sites.filter { $0.checked(from: s) }.map { CheckTarget.http($0.checkID, url: $0.url, auth: $0.basicAuth) }
             + servers.filter { $0.id != s.id && $0.host != s.host }
                 .map { CheckTarget.tcp($0.peerCheckID, host: $0.host, port: $0.port) }
     }
@@ -321,9 +321,19 @@ public actor Poller {
             try await store.addSiteSamples(serverID: s.id, history)
             // A failed push is retried next round; it must not hide the server's metrics.
             var pushed: [CheckTarget]?
-            if let push, (try? await client.setChecks(s, targets: push)) != nil { pushed = push }
+            if let push {
+                if (try? await client.setChecks(s, targets: push)) != nil {
+                    pushed = push
+                } else if push.contains(where: { $0.basicAuth != nil }) {
+                    // Agents before site logins reject the whole list; check
+                    // those sites without the login until the agent is updated.
+                    let plain = push.map { var t = $0; t.basicAuth = nil; return t }
+                    if (try? await client.setChecks(s, targets: plain)) != nil { pushed = plain }
+                }
+            }
             let snap = try await client.snapshot(s)
             try await store.setLatest(s.id, snap)
+            try? await store.addVPNTraffic(s.id, snap)
             // Older agents report no interval and have no settings to change.
             if let interval, let current = snap.intervalS, current != interval {
                 try? await client.setInterval(s, seconds: interval)

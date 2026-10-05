@@ -191,11 +191,29 @@ struct ProblemsView: View {
 
 struct JournalView: View {
     @ObservedObject var model: AppModel
+    @AppStorage("journal.tab") private var tab = JournalTab.alerts
+
+    enum JournalTab: String { case alerts, actions }
 
     var body: some View {
-        EventsList(model: model, serverID: nil, limit: 1000)
-            .navigationTitle("Журнал")
-            .navigationSubtitle("оповещения всех серверов")
+        Group {
+            switch tab {
+            case .alerts: EventsList(model: model, serverID: nil, limit: 1000)
+            case .actions: ActionsLog(model: model)
+            }
+        }
+        .navigationTitle("Журнал")
+        .navigationSubtitle(tab == .alerts ? "оповещения всех серверов" : "кто что делал в приложении")
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker("Журнал", selection: $tab) {
+                    Text("Оповещения").tag(JournalTab.alerts)
+                    Text("Действия").tag(JournalTab.actions)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+        }
     }
 }
 #endif

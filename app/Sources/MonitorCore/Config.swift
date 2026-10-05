@@ -106,11 +106,27 @@ public struct SiteConfig: Codable, Equatable, Identifiable, Sendable {
     /// Server ids to check from; all servers when nil.
     public var from: [String]?
     public var thresholds: Thresholds?
+    /// Login for a site behind a password, so agents check past the login
+    /// prompt. The password is kept in Keychain, never in the file.
+    public var authUser: String?
+    public var authPassword: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, url, group, tags, from, thresholds, authUser
+    }
 
     public init(id: String, name: String, url: String, group: String? = nil, tags: [String]? = nil,
-                from: [String]? = nil, thresholds: Thresholds? = nil) {
+                from: [String]? = nil, thresholds: Thresholds? = nil,
+                authUser: String? = nil, authPassword: String? = nil) {
         self.id = id; self.name = name; self.url = url; self.group = group; self.tags = tags
         self.from = from; self.thresholds = thresholds
+        self.authUser = authUser; self.authPassword = authPassword
+    }
+
+    /// What the agents log in with; nil when the site has no login set.
+    public var basicAuth: CheckTarget.BasicAuth? {
+        guard let user = authUser, !user.isEmpty, let password = authPassword, !password.isEmpty else { return nil }
+        return CheckTarget.BasicAuth(user: user, password: password)
     }
 
     /// Id of the agent check target for this site. The prefix marks targets
