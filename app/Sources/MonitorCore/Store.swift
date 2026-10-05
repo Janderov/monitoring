@@ -47,6 +47,15 @@ public actor Store {
         """,
         // Who caused an event: "system" for alerts; user ids once there are users.
         "ALTER TABLE events ADD COLUMN actor TEXT NOT NULL DEFAULT 'system';",
+        // Site checks as each agent ran them, and domain expiry from the registry.
+        """
+        CREATE TABLE site_samples (
+          site_id TEXT NOT NULL, server_id TEXT NOT NULL, ts INTEGER NOT NULL,
+          ok INTEGER NOT NULL, status INTEGER, latency_ms REAL, error TEXT,
+          PRIMARY KEY (site_id, server_id, ts)) WITHOUT ROWID;
+        CREATE TABLE domains (
+          domain TEXT PRIMARY KEY, expiry INTEGER, error TEXT, checked_at INTEGER NOT NULL);
+        """,
     ]
 
     public static var schemaVersion: Int { migrations.count }
@@ -80,6 +89,42 @@ public actor Store {
                            .int(Int64(s.vpnActiveClients)))
             }
         }
+    }
+
+    /// Stores the results of the app's site checks found in agent snapshots.
+    public func addSiteSamples(serverID: String, _ snaps: [Snapshot]) throws {
+        let rows = snaps.flatMap { snap in
+            (snap.checks ?? []).filter { $0.id.hasPrefix(SiteConfig.checkPrefix) }.map { (snap.time, $0) }
+        }
+        guard !rows.isEmpty else { return }
+        try db.transaction {
+            let st = try db.prepare("""
+            INSERT OR REPLACE INTO site_samples (site_id, server_id, ts, ok, status, latency_ms, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """)
+            for (time, c) in rows {
+                try st.run(.text(String(c.id.dropFirst(SiteConfig.checkPrefix.count))), .text(serverID),
+                           .int(Int64(time.timeIntervalSince1970)), .int(c.ok ? 1 : 0),
+                           c.statusCode.map { .int(Int64($0)) } ?? .null, .real(c.latencyMs),
+                           c.error.map { .text($0) } ?? .null)
+            }
+        }
+    }
+
+    public func setDomain(_ domain: String, _ e: DomainExpiry.Entry) throws {
+        try db.prepare("INSERT OR REPLACE INTO domains (domain, expiry, error, checked_at) VALUES (?, ?, ?, ?)")
+            .run(.text(domain), e.expiry.map { .int(Int64($0.timeIntervalSince1970)) } ?? .null,
+                 e.error.map { .text($0) } ?? .null, .int(Int64(e.checkedAt.timeIntervalSince1970)))
+    }
+
+    public func domains() throws -> [String: DomainExpiry.Entry] {
+        var out: [String: DomainExpiry.Entry] = [:]
+        for r in try db.prepare("SELECT domain, expiry, error, checked_at FROM domains").rows() {
+            out[r.text(0) ?? ""] = DomainExpiry.Entry(
+                expiry: r.int(1).map { Date(timeIntervalSince1970: TimeInterval($0)) }, error: r.text(2),
+                checkedAt: Date(timeIntervalSince1970: TimeInterval(r.int(3) ?? 0)))
+        }
+        return out
     }
 
     public func setLatest(_ serverID: String, _ snap: Snapshot) throws {
@@ -128,6 +173,7 @@ public actor Store {
             let hourlyCut = Int64(now.timeIntervalSince1970 - Store.hourlyRetention)
             try db.prepare("DELETE FROM samples WHERE ts < ?").run(.int(sampleCut))
             try db.prepare("DELETE FROM polls WHERE ts < ?").run(.int(sampleCut))
+            try db.prepare("DELETE FROM site_samples WHERE ts < ?").run(.int(sampleCut))
             try db.prepare("DELETE FROM hourly WHERE hour < ?").run(.int(hourlyCut))
             try db.prepare("DELETE FROM events WHERE ts < ?").run(.int(hourlyCut))
         }
@@ -169,6 +215,28 @@ public actor Store {
                 Sample(time: Date(timeIntervalSince1970: TimeInterval(r.int(0) ?? 0)),
                        cpu: r.real(1) ?? 0, mem: r.real(2) ?? 0, disk: r.real(3) ?? 0, load1: r.real(4) ?? 0,
                        rx: r.real(5) ?? 0, tx: r.real(6) ?? 0, vpnClients: Int(r.int(7) ?? 0))
+            }
+    }
+
+    public struct SiteSample: Equatable, Sendable {
+        public var serverID: String
+        public var time: Date
+        public var ok: Bool
+        public var statusCode: Int?
+        public var latencyMs: Double
+        public var error: String?
+    }
+
+    /// One site's check results from every server, oldest first.
+    public func siteSamples(_ siteID: String, from: Date, to: Date) throws -> [SiteSample] {
+        try db.prepare("""
+        SELECT server_id, ts, ok, status, latency_ms, error FROM site_samples
+        WHERE site_id = ? AND ts >= ? AND ts <= ? ORDER BY ts, server_id
+        """).rows(.text(siteID), .int(Int64(from.timeIntervalSince1970)), .int(Int64(to.timeIntervalSince1970)))
+            .map { r in
+                SiteSample(serverID: r.text(0) ?? "", time: Date(timeIntervalSince1970: TimeInterval(r.int(1) ?? 0)),
+                           ok: r.int(2) == 1, statusCode: r.int(3).map { Int($0) }, latencyMs: r.real(4) ?? 0,
+                           error: r.text(5))
             }
     }
 

@@ -31,6 +31,7 @@ final class FakeAgent: AgentTransport, @unchecked Sendable {
             return (200, try AgentJSON.encoder.encode(page))
         }
         if path == "/v1/snapshot" { return (200, try AgentJSON.encoder.encode(history.last!)) }
+        if method == "PUT", path == "/v1/checks" { return (200, body ?? Data()) }
         return (404, Data())
     }
 }
