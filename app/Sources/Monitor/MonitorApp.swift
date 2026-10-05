@@ -43,7 +43,8 @@ final class AppModel: ObservableObject {
             let store = try Store(path: DataFolder.database.path)
             let poller = Poller(
                 client: AgentClient(transport: PinnedTransport()), store: store,
-                onUpdate: { [weak self] list in Task { @MainActor in self?.statuses = list } },
+                // The model lives as long as the app, so unowned is safe here.
+                onUpdate: { [unowned self] list in Task { @MainActor in self.statuses = list } },
                 onEvents: { [notifier] events in notifier.post(events) })
             self.poller = poller
             await reload()
