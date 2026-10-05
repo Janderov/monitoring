@@ -31,10 +31,17 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- Agents are reached by IP with self-signed certificates, which ATS
+       rejects even when the app checks the certificate itself. Safe here:
+       PinnedTransport accepts an agent only if its SHA-256 fingerprint
+       matches servers.json; other HTTPS keeps normal certificate checks. -->
+  <key>NSAppTransportSecurity</key>
+  <dict><key>NSAllowsArbitraryLoads</key><true/></dict>
 </dict>
 </plist>
 PLIST
 
+plutil -lint "$app/Contents/Info.plist"
 codesign --force --sign - --timestamp=none "$app"
 codesign --verify "$app"
 echo "built $app ($version)"

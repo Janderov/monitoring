@@ -64,7 +64,9 @@ final class ModelsTests: XCTestCase {
         // The example written on first launch must fail validation until
         // real values are pasted in, so it never polls a placeholder.
         let example = try ServersFile.decode(Data(ServersFile.example.utf8))
-        XCTAssertThrowsError(try example.validate())
+        XCTAssertThrowsError(try example.validate()) { err in
+            XCTAssertTrue("\(err)".contains("пример"), "\(err)")
+        }
     }
 
     func testServerThresholdOverridesDecode() throws {

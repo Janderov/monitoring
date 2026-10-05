@@ -168,6 +168,9 @@ public actor Poller {
         if let e = error as? URLError {
             switch e.code {
             case .cancelled: return "сертификат агента не совпадает с сохранённым отпечатком"
+            case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate,
+                 .serverCertificateNotYetValid, .serverCertificateHasUnknownRoot:
+                return "не удалось установить TLS-соединение с агентом"
             case .timedOut: return "таймаут"
             case .cannotConnectToHost: return "порт закрыт или агент не запущен"
             case .notConnectedToInternet: return "нет интернета"

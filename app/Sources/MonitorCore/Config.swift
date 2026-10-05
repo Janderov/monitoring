@@ -72,14 +72,18 @@ public struct ServersFile: Codable, Sendable {
         var ids = Set<String>()
         for s in servers {
             guard !s.id.isEmpty, ids.insert(s.id).inserted else {
-                throw ConfigError("server id \"\(s.id)\" is empty or repeated")
+                throw ConfigError("id сервера \"\(s.id)\" пустой или повторяется")
             }
-            guard s.token.count >= 32 else { throw ConfigError("server \(s.id): token is too short") }
+            if s.token.hasPrefix("PASTE") || s.fingerprint.hasPrefix("PASTE") {
+                throw ConfigError("сервер \(s.id): это пример из файла, впишите свой IP, токен и отпечаток")
+            }
+            guard s.token.count >= 32 else { throw ConfigError("сервер \(s.id): токен слишком короткий") }
             guard Fingerprint.bytes(s.fingerprint) != nil else {
-                throw ConfigError("server \(s.id): fingerprint must be 32 hex bytes")
+                throw ConfigError("сервер \(s.id): отпечаток должен состоять из 64 шестнадцатеричных символов "
+                                  + "(двоеточия можно оставить), сейчас их \(s.fingerprint.filter(\.isHexDigit).count)")
             }
             guard (1...65535).contains(s.port), !s.host.isEmpty else {
-                throw ConfigError("server \(s.id): bad host or port")
+                throw ConfigError("сервер \(s.id): неверный адрес или порт")
             }
         }
     }
