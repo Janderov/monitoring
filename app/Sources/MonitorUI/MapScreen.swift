@@ -262,7 +262,7 @@ struct MapScreen: View {
     /// same in the snapshot, so the hint names both.
     private var noRoutesReason: String? {
         if model.statuses.allSatisfy({ $0.snapshot == nil }) { return nil }
-        return "Каскадов не видно. Если они настроены, переустановите агента на серверах: правый клик → «Переустановить агента…»."
+        return "Каскадов между серверами не видно. Если они настроены, обновите агентов: кнопка «Обновить агентов» вверху окна."
     }
 
     private func hint(_ text: String) -> some View {

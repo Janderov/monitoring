@@ -33,6 +33,12 @@ public struct MainWindow: View {
                             Label("Добавить", systemImage: "plus")
                         }
                         .help("Добавить сервер или сайт")
+                        if model.backend.canInstallAgent, model.can(.installAgent) {
+                            Button { model.present(.updateAgents) } label: {
+                                Label("Обновить агентов", systemImage: "arrow.down.circle")
+                            }
+                            .help("Обновить агентов на всех серверах")
+                        }
                         Button { openWindow(id: SettingsView.id) } label: {
                             Label("Настройки", systemImage: "gearshape")
                         }
