@@ -95,6 +95,9 @@ public final class ServerLocations: ObservableObject {
         return .init(latitude: p[0], longitude: p[1])
     }
 
+    /// The pin was placed by hand rather than by its country.
+    public func isMoved(_ id: String) -> Bool { (overrides[id]?.count ?? 0) == 2 }
+
     /// Nil goes back to the country's default place.
     public func set(_ c: CLLocationCoordinate2D?, for serverID: String) {
         overrides[serverID] = c.map { [$0.latitude, $0.longitude] }
