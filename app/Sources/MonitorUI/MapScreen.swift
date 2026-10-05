@@ -9,16 +9,19 @@ import SwiftUI
 struct MapScreen: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var locations: ServerLocations
+    @ObservedObject private var mac: MacLinksModel
     @State private var position: MapCameraPosition = .automatic
     @State private var center: CLLocationCoordinate2D?
     @State private var selectedPin: String?
     @AppStorage("map.links") private var showLinks = true
     @AppStorage("map.routes") private var showRoutes = true
     @AppStorage("map.onlyProblems") private var onlyProblems = false
+    @AppStorage("map.mac") private var showMac = true
 
     init(model: AppModel) {
         self.model = model
         self.locations = model.locations
+        self.mac = model.mac
     }
 
     /// Servers sharing a place become one pin with a number.
@@ -45,9 +48,15 @@ struct MapScreen: View {
         model.visible.filter { locations.coordinate(for: $0.server) == nil }
     }
 
+    private func macCoordinate(_ pins: [Pin]) -> CLLocationCoordinate2D {
+        locations.manual(MacLinksModel.pinID) ?? mac.defaultCoordinate(avoiding: pins.map(\.coordinate))
+    }
+
     var body: some View {
         let pins = pins
         let routes = showRoutes ? model.routes : []
+        let macAt = macCoordinate(pins)
+        let macRoutes = showMac ? mac.routes(model.statuses.map(\.server)) : []
         HStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
                 Map(position: $position, selection: $selectedPin) {
@@ -88,6 +97,31 @@ struct MapScreen: View {
                             }
                         }
                     }
+                    ForEach(macRoutes) { r in
+                        if let b = coordinate(r.toID), !same(macAt, b) {
+                            MapPolyline(coordinates: [macAt, b], contourStyle: .straight)
+                                .stroke(RouteStyle.macTint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                            Annotation("", coordinate: RouteStyle.midpoint(macAt, b), anchor: .center) {
+                                Image(systemName: "arrowtriangle.right.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(RouteStyle.macTint)
+                                    .rotationEffect(RouteStyle.angle(macAt, b))
+                                    .help(RouteStyle.describe(r, model))
+                            }
+                        }
+                    }
+                    if showMac {
+                        Annotation("Этот Mac", coordinate: macAt, anchor: .center) {
+                            Image(systemName: "laptopcomputer")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 26, height: 26)
+                                .background(RouteStyle.macTint, in: Circle())
+                                .overlay(Circle().strokeBorder(.white, lineWidth: 2))
+                                .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
+                        }
+                        .tag(MacLinksModel.pinID)
+                    }
                     ForEach(pins) { pin in
                         Annotation(pin.title, coordinate: pin.coordinate, anchor: .center) {
                             PinView(level: pin.level, count: pin.statuses.count)
@@ -106,7 +140,11 @@ struct MapScreen: View {
                 layers
                     .padding(12)
             }
-            if let id = selectedPin, let pin = pins.first(where: { $0.id == id }) {
+            if selectedPin == MacLinksModel.pinID, showMac {
+                Divider()
+                MacInspector(model: model, mac: mac, center: center)
+                    .frame(width: 300)
+            } else if let id = selectedPin, let pin = pins.first(where: { $0.id == id }) {
                 Divider()
                 MapInspector(model: model, statuses: pin.statuses, center: center)
                     .frame(width: 300)
@@ -133,6 +171,9 @@ struct MapScreen: View {
                 .help("Показать все серверы")
             }
         }
+        .task(id: showMac) {
+            if showMac { await mac.run() }
+        }
         .onAppear {
             // Opening the map from a server's menu selects its pin.
             if let id = model.selectedServerID, let pin = pins.first(where: { $0.statuses.contains { $0.id == id } }) {
@@ -155,6 +196,16 @@ struct MapScreen: View {
                 HStack(spacing: 10) {
                     routeLegend(dash: [], "туннель")
                     routeLegend(dash: [4, 3], "пересылка")
+                }
+                .font(.caption)
+            }
+            Toggle("Этот Mac", isOn: $showMac)
+            if showMac {
+                HStack(spacing: 4) {
+                    Path { p in p.move(to: .init(x: 0, y: 4)); p.addLine(to: .init(x: 18, y: 4)) }
+                        .stroke(RouteStyle.macTint, style: StrokeStyle(lineWidth: 2.5))
+                        .frame(width: 18, height: 8)
+                    Text("трафик с этого Mac").foregroundStyle(.secondary)
                 }
                 .font(.caption)
             }
@@ -255,6 +306,7 @@ struct LinkPair: Identifiable {
 /// faded while idle.
 enum RouteStyle {
     static let tint = Color.indigo
+    static let macTint = Color.teal
 
     static func color(_ r: VPNRoute) -> Color { r.active ? tint : tint.opacity(0.35) }
 
@@ -286,6 +338,17 @@ enum RouteStyle {
         let from = model.status(r.fromID)?.server.name ?? r.fromID
         let to = model.status(r.toID)?.server.name ?? r.toID
         return "\(from) → \(to)\n" + detail(r)
+    }
+
+    static func detail(_ r: MacRoute) -> String {
+        var parts = [r.processes.joined(separator: ", ")]
+        if !r.ports.isEmpty { parts.append("порт " + r.ports.map(String.init).joined(separator: ", ")) }
+        parts.append("соединений: \(r.connections)")
+        return parts.joined(separator: " · ")
+    }
+
+    @MainActor static func describe(_ r: MacRoute, _ model: AppModel) -> String {
+        "Этот Mac → \(model.status(r.toID)?.server.name ?? r.toID)\n" + detail(r)
     }
 }
 

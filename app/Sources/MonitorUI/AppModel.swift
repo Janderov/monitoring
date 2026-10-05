@@ -25,6 +25,8 @@ public final class AppModel: ObservableObject {
     public let backend: MonitorBackend
     public let locations: ServerLocations
     public let updates: UpdateModel
+    /// This Mac's own connections to the servers, for the map.
+    public let mac = MacLinksModel()
 
     public var overall: ServerStatus.Level {
         if configError != nil { return .warning }
