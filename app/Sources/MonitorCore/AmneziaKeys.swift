@@ -17,6 +17,8 @@ public struct AWGNewClient: Equatable, Sendable {
     public var config: String
     /// Suggested file name, e.g. "iphone-misha.conf".
     public var fileName: String
+    /// The same key as an AmneziaVPN "vpn://" link, nil if it could not be built.
+    public var amneziaLink: String? = nil
 }
 
 /// Creates and deletes AmneziaWG client keys in an AmneziaVPN container over
@@ -31,16 +33,21 @@ public actor AmneziaKeys {
     private let password: String?
     /// Address clients connect to; the server's public IP.
     private let endpointHost: String
+    /// Shown as the server's name in the AmneziaVPN app after importing a link.
+    private let serverName: String?
 
-    public init(ssh: SSHRunner = ProcessSSH(), target: SSHTarget, password: String? = nil, endpointHost: String) {
+    public init(ssh: SSHRunner = ProcessSSH(), target: SSHTarget, password: String? = nil, endpointHost: String,
+                serverName: String? = nil) {
         self.ssh = ssh
         self.target = target
         self.password = password
         self.endpointHost = endpointHost
+        self.serverName = serverName
     }
 
     public init(server: ServerConfig, ssh: SSHRunner = ProcessSSH(), password: String? = nil) {
-        self.init(ssh: ssh, target: server.sshTarget, password: password, endpointHost: server.host)
+        self.init(ssh: ssh, target: server.sshTarget, password: password, endpointHost: server.host,
+                  serverName: server.name)
     }
 
     public func list(container: String) async throws -> [AWGClient] {
@@ -67,7 +74,14 @@ public actor AmneziaKeys {
         let text = state.config.clientConfig(privateKey: keys.privateKey, address: "\(ip)/32",
                                              serverPublicKey: state.serverPublicKey, presharedKey: psk,
                                              endpoint: "\(endpointHost):\(state.config.listenPort ?? "51820")")
-        return AWGNewClient(client: client, config: text, fileName: Self.fileName(clean))
+        let port = state.config.listenPort ?? "51820"
+        var obfuscation: [String: String] = [:]
+        for k in WGConfig.awgKeys { if let v = WGConfig.value(k, in: state.config.interface) { obfuscation[k] = v } }
+        let link = try? AmneziaLink.make(.init(
+            description: serverName ?? endpointHost, hostName: endpointHost, port: port, container: container,
+            clientIP: ip, clientPrivateKey: keys.privateKey, clientPublicKey: keys.publicKey,
+            presharedKey: psk, serverPublicKey: state.serverPublicKey, obfuscation: obfuscation, config: text))
+        return AWGNewClient(client: client, config: text, fileName: Self.fileName(clean), amneziaLink: link)
     }
 
     public func delete(container: String, publicKey: String) async throws {
