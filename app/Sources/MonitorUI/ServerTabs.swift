@@ -155,7 +155,8 @@ struct VPNTab: View {
                         if (v.peers ?? []).isEmpty {
                             Text("Ключей пока нет").foregroundStyle(.secondary)
                         } else {
-                            PeersTable(peers: v.peers ?? [], onDelete: managed(v) ? { [server] key, name in
+                            VPNClientsPanel(model: model, serverID: server.id, peers: v.peers ?? [],
+                                            onDelete: managed(v) ? { [server] key, name in
                                 try await model.backend.deleteVPNKey(server: server, container: v.container,
                                                                      publicKey: key, name: name, password: nil)
                             } : nil)
@@ -219,16 +220,19 @@ struct LinkRow: Identifiable {
 
 struct PeersTable: View {
     var peers: [Snapshot.VPN.Peer]
+    /// Traffic counted by the Mac per day; empty until the first rounds.
+    var traffic = PeerTraffic()
     /// Set when keys in this container can be deleted.
     var onDelete: ((String, String) async throws -> Void)?
+    @Binding var selection: String?
     @State private var sort = [KeyPathComparator(\PeerRow.lastSeen, order: .reverse)]
     @State private var confirm: PeerRow?
     @State private var deleting: String?
     @State private var error: String?
 
     var body: some View {
-        let rows = peers.map(PeerRow.init).sorted(using: sort)
-        Table(rows, sortOrder: $sort) {
+        let rows = peers.map { PeerRow($0, traffic) }.sorted(using: sort)
+        Table(rows, selection: $selection, sortOrder: $sort) {
             TableColumn("Клиент", value: \.name) { p in
                 HStack(spacing: 7) {
                     StatusDot(level: p.peer.active ? .ok : .unknown)
@@ -240,8 +244,12 @@ struct PeersTable: View {
                 Text(p.peer.latestHandshake.map { (p.peer.active ? "активен · " : "") + Fmt.relative($0) } ?? "никогда")
                     .foregroundStyle(p.peer.active ? .primary : .secondary)
             }
-            TableColumn("Скачал ↓", value: \.tx) { p in Text(Fmt.bytes(p.peer.txBytes)).monospacedDigit() }
-            TableColumn("Отдал ↑", value: \.rx) { p in Text(Fmt.bytes(p.peer.rxBytes)).monospacedDigit() }
+            TableColumn("Сегодня ↓ / ↑", value: \.todayTotal) { p in usage(p.today) }
+            TableColumn("За месяц ↓ / ↑", value: \.monthTotal) { p in usage(p.month) }
+            TableColumn("С запуска VPN ↓ / ↑", value: \.tx) { p in
+                Text("\(Fmt.bytes(p.peer.txBytes)) / \(Fmt.bytes(p.peer.rxBytes))").monospacedDigit().foregroundStyle(.secondary)
+            }
+            .width(min: 120, ideal: 150)
         }
         .contextMenu(forSelectionType: String.self) { ids in
             if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
@@ -274,6 +282,12 @@ struct PeersTable: View {
         }
     }
 
+    /// Download / upload as the client sees it (Store rx is client upload).
+    private func usage(_ u: Store.VPNUsage?) -> some View {
+        Text(u.map { "\(Fmt.bytes($0.tx)) / \(Fmt.bytes($0.rx))" } ?? "—").monospacedDigit()
+            .help(traffic.counted ? "" : "Mac считает трафик по дням с этого обновления")
+    }
+
     private func remove(_ publicKey: String, name: String) {
         guard let onDelete else { return }
         deleting = publicKey
@@ -288,15 +302,31 @@ struct PeersTable: View {
 
 /// Rx is what the server received from the client (client upload), Tx what it
 /// sent (client download), so the columns are swapped from the client's view.
+/// Per-client traffic for today and this month, by public key.
+struct PeerTraffic: Equatable {
+    var today: [String: Store.VPNUsage] = [:]
+    var month: [String: Store.VPNUsage] = [:]
+    /// The Mac has counted something on this server already.
+    var counted: Bool { !month.isEmpty }
+}
+
 struct PeerRow: Identifiable {
     var peer: Snapshot.VPN.Peer
+    var today: Store.VPNUsage?
+    var month: Store.VPNUsage?
     var id: String { peer.publicKey }
+    var todayTotal: Double { Double(today?.total ?? 0) }
+    var monthTotal: Double { Double(month?.total ?? 0) }
     var name: String { peer.name ?? String(peer.publicKey.prefix(10)) + "…" }
     var lastSeen: Double { peer.latestHandshake?.timeIntervalSince1970 ?? 0 }
     var rx: Double { Double(peer.rxBytes) }
     var tx: Double { Double(peer.txBytes) }
 
-    init(_ p: Snapshot.VPN.Peer) { peer = p }
+    init(_ p: Snapshot.VPN.Peer, _ t: PeerTraffic = PeerTraffic()) {
+        peer = p
+        today = t.today[p.publicKey]
+        month = t.month[p.publicKey]
+    }
 }
 
 struct ChecksTab: View {
