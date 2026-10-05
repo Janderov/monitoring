@@ -79,6 +79,13 @@ extension AppModel {
     public var sites: [SiteSummary] { siteStatuses.map { SiteSummary(status: $0, servers: statuses) } }
     public var links: [ServerLink] { ServerLink.build(from: statuses) }
 
+    /// VPN cascades and relays between our servers (entry -> exit).
+    public var routes: [VPNRoute] { VPNRoutes.compute(statuses) }
+
+    public func routes(of serverID: String) -> [VPNRoute] {
+        routes.filter { $0.fromID == serverID || $0.toID == serverID }
+    }
+
     /// A readable name for an event's object: a server, or a site ("site:<id>").
     public func objectName(_ id: String) -> String {
         if let s = status(id) { return s.server.name }
