@@ -43,27 +43,53 @@ struct ExternalHop: Hashable, Identifiable {
     }
 }
 
-/// Unknown addresses grouped by country, one grey pin each.
+/// Addresses outside the app, one pin per country, or per well-known
+/// service: Google, Cloudflare and the like are where traffic ends, not
+/// servers of a chain, so they get one named pin instead of a list of IPs.
 struct ExternalPin: Identifiable {
     var country: Country
     var coordinate: CLLocationCoordinate2D
     var hops: [ExternalHop]
-    var id: String { ExternalPin.prefix + country.code }
+    /// The service's name when the addresses belong to one, e.g. "Google".
+    var service: String?
+    var id: String { ExternalPin.prefix + (service ?? country.code) }
 
     static let prefix = "ext-"
 
+    /// Where lines start: each server (or the Mac) once.
+    var sources: [String] { Array(Set(hops.map(\.fromID))).sorted() }
+    var title: String { service ?? country.name }
+
+    /// Registry network names of big services (RDAP "name"), by prefix.
+    static let services: [(String, String)] = [
+        ("GOOGLE", "Google"), ("CLOUDFLARE", "Cloudflare"), ("AMAZON", "Amazon"), ("AWS", "Amazon"),
+        ("MICROSOFT", "Microsoft"), ("MSFT", "Microsoft"), ("AKAMAI", "Akamai"), ("FACEBOOK", "Meta"),
+        ("META", "Meta"), ("APPLE", "Apple"), ("TELEGRAM", "Telegram"), ("GITHUB", "GitHub"),
+        ("FASTLY", "Fastly"), ("OPENAI", "OpenAI"), ("ANTHROPIC", "Anthropic"), ("YANDEX", "Яндекс"),
+        ("VK-", "VK"), ("NETFLIX", "Netflix"), ("TWITTER", "X"), ("DIGITALOCEAN-CDN", "DigitalOcean"),
+    ]
+
+    static func service(of owner: IPOwner?) -> String? {
+        guard let n = owner?.network?.uppercased() else { return nil }
+        return services.first { n.hasPrefix($0.0) }?.1
+    }
+
     @MainActor static func group(_ hops: [ExternalHop], owners: [String: IPOwner],
                                  avoiding pins: [CLLocationCoordinate2D]) -> [ExternalPin] {
-        var byCountry: [String: ExternalPin] = [:]
+        var byKey: [String: ExternalPin] = [:]
         for h in hops {
             guard let code = owners[h.ip]?.country,
                   let c = Country.known.first(where: { $0.code == code }) else { continue }
+            let svc = service(of: owners[h.ip])
             let base = c.coordinate
             let busy = pins.contains { abs($0.latitude - base.latitude) < 1 && abs($0.longitude - base.longitude) < 1 }
-            let at = busy ? CLLocationCoordinate2D(latitude: base.latitude + 2.5, longitude: base.longitude) : base
-            byCountry[code, default: ExternalPin(country: c, coordinate: at, hops: [])].hops.append(h)
+            // Unknown nodes go north of a busy city, services north-west.
+            var at = busy ? CLLocationCoordinate2D(latitude: base.latitude + 2.5, longitude: base.longitude) : base
+            if svc != nil { at.longitude -= 4 }
+            let key = svc ?? code
+            byKey[key, default: ExternalPin(country: c, coordinate: at, hops: [], service: svc)].hops.append(h)
         }
-        return byCountry.values.sorted { $0.id < $1.id }
+        return byKey.values.sorted { $0.id < $1.id }
     }
 }
 
@@ -93,6 +119,40 @@ struct ExternalInspector: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                if let service = pin.service {
+                    serviceBody(service)
+                } else {
+                    unknownBody
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    /// A known service: where the traffic ends. One line per source with
+    /// how many of its addresses are used; the IPs themselves don't matter.
+    private func serviceBody(_ service: String) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Label("\(service) · конечная точка", systemImage: "globe").font(.headline)
+                Text("Это не сервер цепочки, а сам сервис \(service), куда в итоге уходит трафик. Ничего делать не нужно.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(pin.sources, id: \.self) { from in
+                let hs = pin.hops.filter { $0.fromID == from }
+                let ports = Array(Set(hs.flatMap(\.ports))).sorted().map(String.init).joined(separator: ", ")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ExternalPin.describeFrom(hs[0], model)).lineLimit(1)
+                    Text("адресов: \(hs.count) · порт \(ports) · соединений: \(hs.map(\.connections).reduce(0, +))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .font(.callout)
+            }
+        }
+    }
+
+    private var unknownBody: some View {
+            VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 4) {
                     Label("Чужие узлы · \(pin.country.name)", systemImage: "questionmark.circle").font(.headline)
                     Text("Сюда ведут цепочки, но этих адресов нет среди ваших серверов. Если это ваш сервер, добавьте его, и он встанет на карту как обычный.")
@@ -114,8 +174,6 @@ struct ExternalInspector: View {
                     .font(.callout)
                 }
             }
-            .padding(16)
-        }
     }
 }
 

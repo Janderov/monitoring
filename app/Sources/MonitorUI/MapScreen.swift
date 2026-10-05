@@ -135,21 +135,22 @@ struct MapScreen: View {
                         .tag(pin.id)
                     }
                     ForEach(extPins) { pin in
-                        ForEach(pin.hops) { h in
-                            if let a = h.fromID == MacLinksModel.pinID ? Optional(macAt) : coordinate(h.fromID), !same(a, pin.coordinate) {
+                        ForEach(pin.sources, id: \.self) { from in
+                            if let a = from == MacLinksModel.pinID ? Optional(macAt) : coordinate(from), !same(a, pin.coordinate) {
                                 MapPolyline(coordinates: [a, pin.coordinate], contourStyle: .straight)
                                     .stroke(Color.gray.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
                             }
                         }
-                        Annotation(pin.country.name, coordinate: pin.coordinate, anchor: .center) {
-                            Image(systemName: "questionmark")
+                        Annotation(pin.title, coordinate: pin.coordinate, anchor: .center) {
+                            Image(systemName: pin.service == nil ? "questionmark" : "globe")
                                 .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(.white)
                                 .frame(width: 20, height: 20)
                                 .background(Color.gray, in: Circle())
                                 .overlay(Circle().strokeBorder(.white, lineWidth: 2))
                                 .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
-                                .help(pin.hops.map(\.ip).joined(separator: ", "))
+                                .help(pin.service.map { "\($0): конечная точка, адресов \(pin.hops.count)" }
+                                      ?? pin.hops.map(\.ip).joined(separator: ", "))
                         }
                         .tag(pin.id)
                     }
