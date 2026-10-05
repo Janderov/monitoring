@@ -19,6 +19,7 @@ struct MapScreen: View {
     @AppStorage("map.onlyProblems") private var onlyProblems = false
     @AppStorage("map.mac") private var showMac = true
     @AppStorage("map.external") private var showExternal = true
+    @AppStorage("map.clients") private var showClients = true
 
     init(model: AppModel) {
         self.model = model
@@ -62,6 +63,8 @@ struct MapScreen: View {
         let macRoutes = showMac ? mac.routes(model.statuses) : []
         let hops = showExternal ? ExternalHop.compute(model).filter { showMac || $0.fromID != MacLinksModel.pinID } : []
         let extPins = ExternalPin.group(hops, owners: external.owners, avoiding: pins.map(\.coordinate))
+        let spots = showClients ? VPNClientSpot.compute(model) : []
+        let clientPins = ClientPin.group(spots, owners: external.owners, avoiding: pins.map(\.coordinate))
         HStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
                 Map(position: $position, selection: $selectedPin) {
@@ -118,6 +121,19 @@ struct MapScreen: View {
                             }
                         }
                     }
+                    ForEach(clientPins) { pin in
+                        ForEach(pin.serverIDs, id: \.self) { sid in
+                            if let b = coordinate(sid), !same(pin.coordinate, b) {
+                                MapPolyline(coordinates: [pin.coordinate, b], contourStyle: .geodesic)
+                                    .stroke(pin.active(to: sid) ? RouteStyle.clientTint.opacity(0.8) : Color.gray.opacity(0.4),
+                                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                            }
+                        }
+                        Annotation("", coordinate: pin.coordinate, anchor: .center) {
+                            ClientPinView(pin: pin)
+                        }
+                        .tag(pin.id)
+                    }
                     ForEach(extPins) { pin in
                         ForEach(pin.hops) { h in
                             if let a = h.fromID == MacLinksModel.pinID ? Optional(macAt) : coordinate(h.fromID), !same(a, pin.coordinate) {
@@ -167,7 +183,11 @@ struct MapScreen: View {
                 layers
                     .padding(12)
             }
-            if let id = selectedPin, let pin = extPins.first(where: { $0.id == id }) {
+            if let id = selectedPin, let pin = clientPins.first(where: { $0.id == id }) {
+                Divider()
+                ClientsInspector(model: model, pin: pin, owners: external.owners)
+                    .frame(width: 300)
+            } else if let id = selectedPin, let pin = extPins.first(where: { $0.id == id }) {
                 Divider()
                 ExternalInspector(model: model, pin: pin, owners: external.owners)
                     .frame(width: 300)
@@ -205,8 +225,8 @@ struct MapScreen: View {
         .task(id: showMac) {
             if showMac { await mac.run() }
         }
-        .task(id: hops.map(\.ip)) {
-            await external.resolve(hops.map(\.ip))
+        .task(id: hops.map(\.ip) + spots.map(\.ip)) {
+            await external.resolve(hops.map(\.ip) + Array(Set(spots.map(\.ip))).sorted())
         }
         .onAppear {
             // Opening the map from a server's menu selects its pin.
@@ -233,6 +253,7 @@ struct MapScreen: View {
                 }
                 .font(.caption)
             }
+            Toggle("Клиенты VPN", isOn: $showClients)
             Toggle("Чужие узлы", isOn: $showExternal)
             Toggle("Этот Mac", isOn: $showMac)
             if showMac {
@@ -342,6 +363,7 @@ struct LinkPair: Identifiable {
 enum RouteStyle {
     static let tint = Color.indigo
     static let macTint = Color.teal
+    static let clientTint = Color.orange
 
     static func color(_ r: VPNRoute) -> Color { r.active ? tint : tint.opacity(0.35) }
 
