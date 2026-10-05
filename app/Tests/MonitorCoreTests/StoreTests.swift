@@ -147,4 +147,30 @@ final class StoreTests: XCTestCase {
         let gone = try await store.vpnTraffic("nl", from: day1, to: day2, calendar: cal)
         XCTAssertTrue(gone.isEmpty)
     }
+
+    func testLinkSamples() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try Store(path: dir.appendingPathComponent("m.sqlite").path)
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        var a = Fixtures.snapshot(time: t0)
+        a.checks = [
+            Snapshot.Check(id: "peer-us", kind: "tcp", target: "198.51.100.5:9443", ok: true, latencyMs: 92.5),
+            Snapshot.Check(id: "site-shop", kind: "http", target: "https://example.com", ok: true, latencyMs: 40),
+        ]
+        var b = Fixtures.snapshot(time: t0.addingTimeInterval(60))
+        b.checks = [Snapshot.Check(id: "peer-us", kind: "tcp", target: "198.51.100.5:9443", ok: false,
+                                   latencyMs: 0, error: "timeout")]
+        try await store.addLinkSamples(serverID: "nl", [a, b])
+        let got = try await store.linkSamples("nl", from: t0, to: t0.addingTimeInterval(120))
+        XCTAssertEqual(got.map(\.peerID), ["us", "us"])
+        XCTAssertEqual(got.map(\.latencyMs), [92.5, nil])
+        XCTAssertEqual(got.map(\.ok), [true, false])
+
+        // Removing either end drops the history.
+        try await store.forget(serverID: "us")
+        let gone = try await store.linkSamples("nl", from: t0, to: t0.addingTimeInterval(120))
+        XCTAssertTrue(gone.isEmpty)
+    }
 }

@@ -360,6 +360,20 @@ type sampler struct {
 	// flowsFile is written by the root helper (monitor-agent flows).
 	flowsFile   string
 	flowsMaxAge time.Duration
+	// Database statistics run a query in each DB container, so they are
+	// refreshed at most once a minute even when sampling is faster.
+	dbAt    time.Time
+	dbCache []collect.Database
+}
+
+func (s *sampler) databases(containers []collect.Container, now time.Time) []collect.Database {
+	if s.docker == nil || containers == nil {
+		return nil
+	}
+	if now.Sub(s.dbAt) >= time.Minute-2*time.Second {
+		s.dbCache, s.dbAt = s.docker.Databases(containers), now
+	}
+	return s.dbCache
 }
 
 // linkSources lists the host and every running container's network namespace.
@@ -387,6 +401,7 @@ func (s *sampler) sample(ctx context.Context) collect.Snapshot {
 	if s.docker != nil && snap.Containers != nil {
 		snap.VPN = s.docker.VPN(snap.Containers, now)
 	}
+	snap.Databases = s.databases(snap.Containers, now)
 	snap.Services = probe.Services(s.procRoot, s.services)
 	snap.Links = links.Collect(s.linkSources(snap.Containers), map[int]bool{s.listenPort: true})
 	if f := flows.Read(s.flowsFile, now, s.flowsMaxAge); f != nil {

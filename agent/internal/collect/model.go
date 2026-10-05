@@ -78,3 +78,19 @@ type Check struct {
 	// Auth: the probe logged in with credentials from the Mac app.
 	Auth bool `json:"auth,omitempty"`
 }
+
+// Database is one PostgreSQL or MySQL container: client connections and the
+// size of each database. Read once a minute at most.
+type Database struct {
+	Container      string   `json:"container"`
+	Engine         string   `json:"engine"` // "postgresql" or "mysql"
+	Connections    int      `json:"connections"`
+	MaxConnections int      `json:"max_connections,omitempty"`
+	Databases      []DBSize `json:"databases,omitempty"`
+	Error          string   `json:"error,omitempty"`
+}
+
+type DBSize struct {
+	Name      string `json:"name"`
+	SizeBytes int64  `json:"size_bytes"`
+}

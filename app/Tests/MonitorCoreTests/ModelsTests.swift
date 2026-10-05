@@ -15,6 +15,9 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(s.services?.first?.port, 443)
         XCTAssertNotNil(s.checks?.first?.tlsExpiry)
         XCTAssertNotNil(s.vpn?.first?.peers?.first?.latestHandshake)
+        XCTAssertEqual(s.databases?.first?.connections, 7)
+        XCTAssertEqual(s.databases?.first?.maxConnections, 100)
+        XCTAssertEqual(s.databases?.first?.totalBytes, 60_128_800)
     }
 
     func testDecodeMinimalSnapshot() throws {
