@@ -1,12 +1,21 @@
 #if canImport(SwiftUI) && canImport(AppKit)
 import AppKit
 import MonitorCore
+import MonitorUI
 import SwiftUI
 import UserNotifications
 
 @main
 struct MonitorApp: App {
-    @StateObject private var model = AppModel()
+    private let notifier: Notifier
+    @StateObject private var model: AppModel
+
+    init() {
+        let notifier = Notifier()
+        notifier.requestPermission()
+        self.notifier = notifier
+        _model = StateObject(wrappedValue: AppModel(notify: { notifier.post($0) }))
+    }
 
     var body: some Scene {
         MenuBarExtra {
@@ -16,58 +25,6 @@ struct MonitorApp: App {
         }
         .menuBarExtraStyle(.window)
     }
-}
-
-/// Owns the poller and turns its callbacks into UI state and notifications.
-@MainActor
-final class AppModel: ObservableObject {
-    @Published var statuses: [ServerStatus] = []
-    @Published var configError: String?
-
-    private var poller: Poller?
-    private let notifier = Notifier()
-
-    var overall: ServerStatus.Level {
-        if configError != nil { return .warning }
-        return statuses.map(\.level).max() ?? .unknown
-    }
-
-    init() {
-        notifier.requestPermission()
-        Task { await start() }
-    }
-
-    private func start() async {
-        do {
-            try DataFolder.prepare()
-            let store = try Store(path: DataFolder.database.path)
-            let poller = Poller(
-                client: AgentClient(transport: PinnedTransport()), store: store,
-                // The model lives as long as the app, so unowned is safe here.
-                onUpdate: { [unowned self] list in Task { @MainActor in self.statuses = list } },
-                onEvents: { [notifier] events in notifier.post(events) })
-            self.poller = poller
-            await reload()
-            await poller.start()
-        } catch {
-            configError = "Не удалось открыть данные: \(error)"
-        }
-    }
-
-    func reload() async {
-        guard let poller else { return }
-        do {
-            let file = try ServersFile.load(from: DataFolder.serversFile)
-            configError = nil
-            await poller.setServers(file.servers)
-            await poller.pollAll(now: Date())
-        } catch {
-            configError = "servers.json: \(error)"
-        }
-    }
-
-    func openConfig() { NSWorkspace.shared.open(DataFolder.serversFile) }
-    func openDataFolder() { NSWorkspace.shared.open(DataFolder.url) }
 }
 
 /// macOS notifications. They need a real app bundle (Monitor.app); when the

@@ -70,4 +70,5 @@ scripts/build-app.sh            # dist/Monitor.app, только на Mac
 ```
 
 `MonitorCore` содержит модели, клиент агента, правила оповещений, SQLite и опрос;
-`Monitor` содержит только интерфейс строки меню и уведомления.
+`MonitorUI` содержит модель приложения `AppModel` и представления SwiftUI;
+`Monitor` содержит точку входа и уведомления macOS.

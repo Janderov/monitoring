@@ -15,7 +15,9 @@ let package = Package(
         // Builds and tests on Linux too, so CI can run it cheaply.
         .target(name: "MonitorCore", dependencies: ["CSQLite"]),
         // The menu bar app (macOS only; the sources are empty elsewhere).
-        .executableTarget(name: "Monitor", dependencies: ["MonitorCore"]),
+        // SwiftUI views and the observable app model (macOS only; empty on Linux).
+        .target(name: "MonitorUI", dependencies: ["MonitorCore"]),
+        .executableTarget(name: "Monitor", dependencies: ["MonitorCore", "MonitorUI"]),
         .testTarget(name: "MonitorCoreTests", dependencies: ["MonitorCore"]),
     ]
 )
