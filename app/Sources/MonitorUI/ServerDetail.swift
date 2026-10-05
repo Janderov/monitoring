@@ -135,7 +135,7 @@ struct ServerDetail: View {
         case .metrics: MetricsTab(model: model, status: status, period: period)
         case .services: ServicesTab(services: snap?.services ?? [])
         case .containers: ContainersTab(containers: snap?.containers ?? [])
-        case .vpn: VPNTab(model: model, server: status.server, vpn: snap?.vpn ?? [])
+        case .vpn: VPNTab(model: model, server: status.server, vpn: snap?.vpn ?? [], links: snap?.links ?? [])
         case .processes: ProcessesTab(processes: snap?.processes ?? [])
         case .checks: ChecksTab(model: model, checks: snap?.checks ?? [])
         case .events: EventsList(model: model, serverID: status.id)
