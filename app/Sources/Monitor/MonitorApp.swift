@@ -23,11 +23,15 @@ struct MonitorApp: App {
             MainWindow(model: model)
         }
         .defaultSize(width: 1180, height: 760)
-        .commands { MonitorCommands(model: model) }
+        .commands {
+            MonitorCommands(model: model)
+            CommandGroup(replacing: .appSettings) { SettingsCommand() }
+        }
 
-        Settings {
+        Window("Настройки", id: SettingsView.id) {
             SettingsView(model: model)
         }
+        .windowResizability(.contentSize)
 
         MenuBarExtra {
             MenuBarContent(model: model)
@@ -35,6 +39,19 @@ struct MonitorApp: App {
             Image(nsImage: MenuBarIcon.image(for: model.overall))
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// ⌘, opens the settings window.
+private struct SettingsCommand: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Настройки…") {
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: SettingsView.id)
+        }
+        .keyboardShortcut(",")
     }
 }
 

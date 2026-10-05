@@ -2,8 +2,12 @@
 import MonitorCore
 import SwiftUI
 
-/// The app's Settings window (⌘,).
+/// The app's Settings window (⌘,). A plain window rather than the SwiftUI
+/// Settings scene: a menu bar app has no app menu, and on macOS 14+ the
+/// Settings scene cannot be opened from code without SettingsLink.
 public struct SettingsView: View {
+    public static let id = "settings"
+
     @ObservedObject var model: AppModel
 
     public init(model: AppModel) { self.model = model }
