@@ -43,7 +43,6 @@ public enum MenuBarIcon {
 public struct MenuBarContent: View {
     @ObservedObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
 
     public init(model: AppModel) { self.model = model }
 
@@ -161,7 +160,8 @@ public struct MenuBarContent: View {
             MenuButton(title: "Открыть окно", shortcut: "⌘0") { openMain() }
             MenuButton(title: "Настройки…", shortcut: "⌘,") {
                 NSApp.activate(ignoringOtherApps: true)
-                openSettings()
+                // The SwiftUI Settings scene answers this action (openSettings needs a newer SDK).
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
             }
             MenuButton(title: "Выйти", shortcut: "⌘Q") { NSApp.terminate(nil) }
         }
