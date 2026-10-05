@@ -8,6 +8,7 @@ import SwiftUI
 @MainActor
 public final class AppModel: ObservableObject {
     @Published public private(set) var statuses: [ServerStatus] = []
+    @Published public private(set) var siteStatuses: [SiteStatus] = []
     @Published public private(set) var configError: String?
     /// Time of the last finished polling round, for "опрос 12 с назад".
     @Published public private(set) var lastRound: Date?
@@ -46,12 +47,14 @@ public final class AppModel: ObservableObject {
     private func start() async {
         do {
             // The model lives as long as the app, so unowned is safe here.
-            try await backend.start { [unowned self] list in
+            try await backend.start(onUpdate: { [unowned self] list in
                 Task { @MainActor in
                     self.statuses = list
                     self.lastRound = Date()
                 }
-            }
+            }, onSites: { [unowned self] list in
+                Task { @MainActor in self.siteStatuses = list }
+            })
         } catch {
             configError = "Не удалось открыть данные: \(describe(error))"
             return
