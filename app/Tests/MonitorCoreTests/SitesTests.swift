@@ -57,13 +57,24 @@ final class SitesTests: XCTestCase {
                           domainError: nil, alerts: [])
     }
 
+    func testBasicAuthTargetEncoding() throws {
+        let plain = String(decoding: try JSONEncoder().encode(CheckTarget.http("site-a", url: "https://a.example.com")),
+                           as: UTF8.self)
+        XCTAssertFalse(plain.contains("basic_auth"))
+        let t = CheckTarget.http("site-a", url: "https://a.example.com", auth: .init(user: "u", password: "p"))
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(t)) as? [String: Any]
+        XCTAssertEqual((json?["basic_auth"] as? [String: String])?["user"], "u")
+    }
+
     func testPasswordProtectedSiteIsUp() throws {
         // Older agents report 401/403 as a failure.
         let json = #"""
         [{"id":"site-a","kind":"http","target":"https://a.example.com","ok":false,"status_code":401,
           "latency_ms":120,"error":"401 Unauthorized"},
          {"id":"site-b","kind":"http","target":"https://b.example.com","ok":false,"status_code":502,
-          "latency_ms":80,"error":"502 Bad Gateway"}]
+          "latency_ms":80,"error":"502 Bad Gateway"},
+         {"id":"site-c","kind":"http","target":"https://c.example.com","ok":false,"status_code":401,
+          "latency_ms":90,"error":"логин или пароль для проверки не подошли","auth":true}]
         """#
         let checks = try AgentJSON.decoder.decode([Snapshot.Check].self, from: Data(json.utf8))
         XCTAssertTrue(checks[0].ok)
@@ -71,6 +82,9 @@ final class SitesTests: XCTestCase {
         XCTAssertEqual(checks[0].statusCode, 401)
         XCTAssertFalse(checks[1].ok)
         XCTAssertEqual(checks[1].error, "502 Bad Gateway")
+        // Logged in with the site's credentials and refused: really down.
+        XCTAssertFalse(checks[2].ok)
+        XCTAssertEqual(checks[2].auth, true)
     }
 
     func testSiteRules() {

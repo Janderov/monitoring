@@ -75,4 +75,6 @@ type Check struct {
 	LatencyMs  float64    `json:"latency_ms"`
 	TLSExpiry  *time.Time `json:"tls_expiry,omitempty"`
 	Error      string     `json:"error,omitempty"`
+	// Auth: the probe logged in with credentials from the Mac app.
+	Auth bool `json:"auth,omitempty"`
 }

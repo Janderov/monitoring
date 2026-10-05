@@ -132,4 +132,19 @@ func TestChecksEndpoints(t *testing.T) {
 	if len(got.Targets) != 2 || got.Targets[1].Port != 22 {
 		t.Errorf("GET after bad PUTs = %+v, want the 2 good targets", got.Targets)
 	}
+
+	// Site credentials go in, the password never comes back.
+	withAuth := `{"targets":[{"id":"site","kind":"http","url":"https://example.com","basic_auth":{"user":"u","password":"s3cret"}}]}`
+	rec := doMethod(t, h, http.MethodPut, "/v1/checks", auth, withAuth)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "s3cret") {
+		t.Fatalf("PUT with auth: %d %s", rec.Code, rec.Body)
+	}
+	body := do(t, h, "/v1/checks", auth).Body.String()
+	if strings.Contains(body, "s3cret") || !strings.Contains(body, `"user":"u"`) {
+		t.Errorf("GET leaks or loses credentials: %s", body)
+	}
+	if rec := doMethod(t, h, http.MethodPut, "/v1/checks", auth,
+		`{"targets":[{"id":"n","kind":"tcp","host":"a","port":1,"basic_auth":{"user":"u"}}]}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("basic_auth on tcp: %d, want 400", rec.Code)
+	}
 }
