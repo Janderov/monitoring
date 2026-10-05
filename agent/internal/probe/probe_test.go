@@ -46,14 +46,25 @@ func TestServices(t *testing.T) {
 
 func TestDetectByProcess(t *testing.T) {
 	got := Detect(fakeProcWith(t, "mariadbd"))
-	found := false
-	for _, s := range got {
-		if s.Kind == "mysql" {
-			found = true
+	var mysql *ServiceSpec
+	for i := range got {
+		if got[i].Kind == "mysql" {
+			mysql = &got[i]
 		}
 	}
-	if !found {
-		t.Errorf("Detect = %+v, want mysql via mariadbd", got)
+	if mysql == nil {
+		t.Fatalf("Detect = %+v, want mysql via mariadbd", got)
+	}
+	// Nothing listens on 3306 here, like a database in Docker without a
+	// published port: watch the process only, or it would look down.
+	if portOpen(3306, time.Second) {
+		t.Skip("something listens on 3306 on this machine")
+	}
+	if mysql.Port != 0 {
+		t.Errorf("port = %d, want 0 (not reachable at detection)", mysql.Port)
+	}
+	if r := Services(fakeProcWith(t, "mariadbd"), []ServiceSpec{*mysql}); !r[0].ProcessRunning || r[0].Error != "" {
+		t.Errorf("service = %+v, want running with no error", r[0])
 	}
 }
 

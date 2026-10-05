@@ -83,6 +83,9 @@ type Container struct {
 	Image  string `json:"image"`
 	State  string `json:"state"`
 	Status string `json:"status"`
+	// Health is the Docker healthcheck result: "healthy", "unhealthy",
+	// "starting", or empty when the container has no healthcheck.
+	Health string `json:"health,omitempty"`
 }
 
 // ContainerLister is implemented by the docker package; nil disables it.

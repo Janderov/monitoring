@@ -64,7 +64,21 @@ func convert(raw []apiContainer) []collect.Container {
 		if len(id) > 12 {
 			id = id[:12]
 		}
-		out = append(out, collect.Container{ID: id, Name: name, Image: r.Image, State: r.State, Status: r.Status})
+		out = append(out, collect.Container{ID: id, Name: name, Image: r.Image, State: r.State, Status: r.Status, Health: health(r.Status)})
 	}
 	return out
+}
+
+// health extracts the healthcheck state from the list API's Status text,
+// e.g. "Up 2 weeks (healthy)" or "Up 5 seconds (health: starting)".
+func health(status string) string {
+	switch {
+	case strings.HasSuffix(status, "(healthy)"):
+		return "healthy"
+	case strings.HasSuffix(status, "(unhealthy)"):
+		return "unhealthy"
+	case strings.HasSuffix(status, "(health: starting)"):
+		return "starting"
+	}
+	return ""
 }
