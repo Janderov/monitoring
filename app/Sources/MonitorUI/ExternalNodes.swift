@@ -33,7 +33,7 @@ struct ExternalHop: Hashable, Identifiable {
                 out.append(.init(fromID: s.id, ip: l.remoteIp, ports: ports, connections: l.connections, via: l.via))
             }
         }
-        for l in model.mac.unknown(servers) {
+        for l in model.mac.unknown(model.statuses) {
             let ports = l.ports.filter { !ignoredPorts.contains($0) }
             guard !ports.isEmpty else { continue }
             out.append(.init(fromID: MacLinksModel.pinID, ip: l.remoteIP, ports: ports,

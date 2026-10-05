@@ -59,7 +59,7 @@ struct MapScreen: View {
         let pins = pins
         let routes = showRoutes ? model.routes : []
         let macAt = macCoordinate(pins)
-        let macRoutes = showMac ? mac.routes(model.statuses.map(\.server)) : []
+        let macRoutes = showMac ? mac.routes(model.statuses) : []
         let hops = showExternal ? ExternalHop.compute(model).filter { showMac || $0.fromID != MacLinksModel.pinID } : []
         let extPins = ExternalPin.group(hops, owners: external.owners, avoiding: pins.map(\.coordinate))
         HStack(spacing: 0) {
@@ -103,14 +103,17 @@ struct MapScreen: View {
                         }
                     }
                     ForEach(macRoutes) { r in
-                        if let b = coordinate(r.toID), !same(macAt, b) {
-                            MapPolyline(coordinates: [macAt, b], contourStyle: .straight)
-                                .stroke(RouteStyle.macTint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                            Annotation("", coordinate: RouteStyle.midpoint(macAt, b), anchor: .center) {
+                        // Through the Mac's VPN the hop starts at that server;
+                        // the Mac -> VPN server arrow is a route of its own.
+                        let a = r.viaID.flatMap { coordinate($0) } ?? macAt
+                        if let b = coordinate(r.toID), !same(a, b) {
+                            MapPolyline(coordinates: [a, b], contourStyle: .straight)
+                                .stroke(RouteStyle.color(r), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                            Annotation("", coordinate: RouteStyle.midpoint(a, b), anchor: .center) {
                                 Image(systemName: "arrowtriangle.right.fill")
                                     .font(.system(size: 12))
-                                    .foregroundStyle(RouteStyle.macTint)
-                                    .rotationEffect(RouteStyle.angle(macAt, b))
+                                    .foregroundStyle(RouteStyle.color(r))
+                                    .rotationEffect(RouteStyle.angle(a, b))
                                     .help(RouteStyle.describe(r, model))
                             }
                         }
@@ -372,15 +375,23 @@ enum RouteStyle {
         return "\(from) → \(to)\n" + detail(r)
     }
 
+    static func color(_ r: MacRoute) -> Color { r.active ? macTint : macTint.opacity(0.4) }
+
     static func detail(_ r: MacRoute) -> String {
         var parts = [r.processes.joined(separator: ", ")]
+        if !r.active { return parts[0] + " · по настройкам, сейчас без трафика" }
         if !r.ports.isEmpty { parts.append("порт " + r.ports.map(String.init).joined(separator: ", ")) }
         parts.append("соединений: \(r.connections)")
         return parts.joined(separator: " · ")
     }
 
+    @MainActor static func path(_ r: MacRoute, _ model: AppModel) -> String {
+        let name = { (id: String) in model.status(id)?.server.name ?? id }
+        return (["Этот Mac"] + (r.viaID.map { [name($0)] } ?? []) + [name(r.toID)]).joined(separator: " → ")
+    }
+
     @MainActor static func describe(_ r: MacRoute, _ model: AppModel) -> String {
-        "Этот Mac → \(model.status(r.toID)?.server.name ?? r.toID)\n" + detail(r)
+        path(r, model) + "\n" + detail(r)
     }
 }
 

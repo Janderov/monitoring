@@ -54,6 +54,55 @@ final class LocalLinksTests: XCTestCase {
         XCTAssertEqual(LocalLinks.unknown(links, servers: servers).count, 0)
     }
 
+    func testTunnelMatchesActivePeerOnly() {
+        var nl = Fixtures.snapshot()
+        nl.vpn![0].peers = [.init(name: "mac", publicKey: "M=", latestHandshake: nil, active: true,
+                                  rxBytes: 1, txBytes: 1, endpoint: "5.6.7.8:5000", allowedIps: "10.8.1.17/32")]
+        var us = Fixtures.snapshot()
+        // Same Amnezia subnet on another server, but the peer is idle.
+        us.vpn![0].peers = [.init(name: "old", publicKey: "O=", latestHandshake: nil, active: false,
+                                  rxBytes: 1, txBytes: 1, endpoint: nil, allowedIps: "10.8.1.17/32")]
+        let statuses = [
+            ServerStatus(server: ServerConfig(id: "nl", name: "NL", host: "103.54.19.175", token: "t", fingerprint: "f"),
+                         snapshot: nl, lastSeen: nil, error: nil, alerts: []),
+            ServerStatus(server: ServerConfig(id: "us", name: "US", host: "149.28.225.248", token: "t", fingerprint: "f"),
+                         snapshot: us, lastSeen: nil, error: nil, alerts: []),
+        ]
+        let r = LocalLinks.tunnelRoutes(localAddresses: ["10.8.1.17"], statuses: statuses)
+        XCTAssertEqual(r.map(\.toID), ["nl"])
+        let merged = LocalLinks.merge(r, [MacRoute(toID: "nl", processes: ["gost"], ports: [443], connections: 2)])
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged[0].connections, 3)
+
+        // gost's SSH to the US leaves from the NL tunnel address: Mac -> NL -> US.
+        let out = """
+        Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)       rxbytes      txbytes  rhiwat  shiwat    process:pid
+        tcp4       0      0  10.8.1.17.54194        149.28.225.248.22      ESTABLISHED     18370       2217  131072  131076  gost:14100
+        tcp4       0      0  192.168.1.10.5000      155.212.164.127.22     ESTABLISHED     1           1     131072  131076  ssh:900
+        """
+        let through = LocalLinks.tunnelServers(localAddresses: ["10.8.1.17"], statuses: statuses)
+        XCTAssertEqual(through, ["10.8.1.17": "nl"])
+        let routes = LocalLinks.routes(LocalLinks.parse(out), servers: statuses.map(\.server), through: through)
+        XCTAssertEqual(routes.map(\.id), ["nl>us"])
+        XCTAssertEqual(routes[0].processes, ["gost"])
+    }
+
+    func testLocalProxiesAndSettings() {
+        let proxies = LocalLinks.localProxies(sample, ownPID: 400)
+        XCTAssertEqual(proxies, [LocalProxy(process: "gost", pid: 812)])
+        let servers = [
+            ServerConfig(id: "nl", name: "NL", host: "103.54.19.175", token: "t", fingerprint: "f"),
+            ServerConfig(id: "us", name: "US", host: "149.28.225.248", token: "t", fingerprint: "f"),
+            ServerConfig(id: "x", name: "X", host: "1.2.3.4", token: "t", fingerprint: "f"),
+        ]
+        let args = "/opt/homebrew/bin/gost -L socks5://127.0.0.1:1080 -F relay+tls://u:p@149.28.225.248:8443 -F 11.2.3.45:1"
+        let r = LocalLinks.configuredRoutes(["gost": args], servers: servers)
+        XCTAssertEqual(r.map(\.toID), ["us"])
+        XCTAssertFalse(r[0].active)
+        XCTAssertTrue(LocalLinks.mentions("addr: \"103.54.19.175:443\"", host: "103.54.19.175"))
+        XCTAssertFalse(LocalLinks.mentions("103.54.19.1750", host: "103.54.19.175"))
+    }
+
     func testAddresses() {
         XCTAssertEqual(LocalLinks.splitAddress("1.2.3.4.443")?.1, 443)
         XCTAssertEqual(LocalLinks.splitAddress("2001:db8::1.443")?.0, "2001:db8::1")

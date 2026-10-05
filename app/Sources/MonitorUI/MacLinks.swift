@@ -11,6 +11,11 @@ import SwiftUI
 @MainActor
 public final class MacLinksModel: ObservableObject {
     @Published public private(set) var links: [MacLink] = []
+    /// IPv4 addresses of this Mac's VPN interfaces (utun*).
+    @Published public private(set) var tunnelAddresses: [String] = []
+    /// Command line and config file of each local proxy, by program name.
+    /// Kept in memory only and searched just for our servers' addresses.
+    private var proxySettings: [String: String] = [:]
     @Published public private(set) var updated: Date?
 
     public static let pinID = "this-mac"
@@ -18,28 +23,97 @@ public final class MacLinksModel: ObservableObject {
     /// Refreshes until the calling task is cancelled (the map closes).
     func run() async {
         while !Task.isCancelled {
-            let found = await Task.detached(priority: .utility) { MacLinksModel.read() }.value
+            let (found, tunnels, settings) = await Task.detached(priority: .utility) {
+                let (links, proxies) = MacLinksModel.read()
+                return (links, MacLinksModel.tunnelAddresses(), MacLinksModel.settings(of: proxies))
+            }.value
             links = found
+            tunnelAddresses = tunnels
+            proxySettings = settings
             updated = Date()
             try? await Task.sleep(for: .seconds(10))
         }
     }
 
-    public func routes(_ servers: [ServerConfig]) -> [MacRoute] { LocalLinks.routes(links, servers: servers) }
+    public func routes(_ statuses: [ServerStatus]) -> [MacRoute] {
+        let servers = statuses.map(\.server)
+        let through = LocalLinks.tunnelServers(localAddresses: tunnelAddresses, statuses: statuses)
+        let live = LocalLinks.merge(LocalLinks.routes(links, servers: servers, through: through),
+                                    LocalLinks.tunnelRoutes(localAddresses: tunnelAddresses, statuses: statuses))
+        let idle = LocalLinks.configuredRoutes(proxySettings, servers: servers)
+            .filter { r in !live.contains { $0.toID == r.toID } }
+        return LocalLinks.merge(live, idle)
+    }
     /// Other addresses reached by the programs that also carry traffic to
     /// our servers (gost, AmneziaVPN): likely chain hops not added yet.
     /// Browsers talking to websites directly are left out.
-    public func unknown(_ servers: [ServerConfig]) -> [MacLink] {
-        let carriers = Set(routes(servers).flatMap(\.processes))
+    public func unknown(_ statuses: [ServerStatus]) -> [MacLink] {
+        let servers = statuses.map(\.server)
+        let carriers = Set(LocalLinks.routes(links, servers: servers).flatMap(\.processes))
         return LocalLinks.unknown(links, servers: servers).filter { carriers.contains($0.process) }
     }
 
-    nonisolated private static func read() -> [MacLink] {
+    nonisolated private static func read() -> ([MacLink], [LocalProxy]) {
         let me = ProcessInfo.processInfo.processIdentifier
-        return ["inet", "inet6"].flatMap { family in
-            LocalLinks.parse(netstat(family), ownPID: me, name: processName)
+        var links: [MacLink] = []
+        var proxies: [LocalProxy] = []
+        for family in ["inet", "inet6"] {
+            let out = netstat(family)
+            links += LocalLinks.parse(out, ownPID: me, name: processName)
+            proxies += LocalLinks.localProxies(out, ownPID: me)
         }
-        .map { var l = $0; l.process = pretty(l.process); return l }
+        links = links.map { var l = $0; l.process = pretty(l.process); return l }
+        return (links, proxies)
+    }
+
+    /// Arguments of each proxy plus the config file it names (-C/--config).
+    /// Processes of other users are not readable and are skipped.
+    nonisolated private static func settings(of proxies: [LocalProxy]) -> [String: String] {
+        var out: [String: String] = [:]
+        for p in proxies {
+            guard let args = arguments(p.pid) else { continue }
+            var text = args.joined(separator: " ")
+            for (i, a) in args.enumerated() where (a == "-C" || a == "--config" || a == "-c") && i + 1 < args.count {
+                let path = (args[i + 1] as NSString).expandingTildeInPath
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                   (attrs[.size] as? Int ?? 0) < 1_000_000,
+                   let file = try? String(contentsOfFile: path, encoding: .utf8) {
+                    text += "\n" + file
+                }
+            }
+            out[pretty(p.process), default: ""] += text
+        }
+        return out
+    }
+
+    nonisolated private static func arguments(_ pid: Int32) -> [String]? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 4 else { return nil }
+        var buf = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buf, &size, nil, 0) == 0, size > 4 else { return nil }
+        let argc = buf.withUnsafeBytes { $0.load(as: Int32.self) }
+        // After argc: the executable path, padding NULs, then argv strings.
+        let parts = buf[4..<size].split(separator: 0, omittingEmptySubsequences: true)
+            .map { String(decoding: $0, as: UTF8.self) }
+        return Array(parts.dropFirst().prefix(Int(argc)))
+    }
+
+    nonisolated private static func tunnelAddresses() -> [String] {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return [] }
+        defer { freeifaddrs(head) }
+        var out: [String] = []
+        for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let ifa = p.pointee
+            guard String(cString: ifa.ifa_name).hasPrefix("utun"), let sa = ifa.ifa_addr,
+                  sa.pointee.sa_family == UInt8(AF_INET) else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+                out.append(String(cString: host))
+            }
+        }
+        return out
     }
 
     nonisolated private static func netstat(_ family: String) -> String {
@@ -70,14 +144,33 @@ public final class MacLinksModel: ObservableObject {
         return name
     }
 
-    /// Default place: the country of the Mac's region settings, nudged off a
-    /// server pin in the same city. The user can move it like any pin.
+    /// Default place: the country of the Mac's time zone (region settings
+    /// are often left on another country), nudged off a server pin in the
+    /// same city. The user can move it like any pin.
     func defaultCoordinate(avoiding pins: [CLLocationCoordinate2D]) -> CLLocationCoordinate2D {
-        let code = Locale.current.region?.identifier ?? "RU"
+        let code = Self.country(ofTimeZone: TimeZone.current.identifier) ?? Locale.current.region?.identifier ?? "RU"
         let base = (Country.known.first { $0.code == code } ?? Country.known[0]).coordinate
         let busy = pins.contains { abs($0.latitude - base.latitude) < 1 && abs($0.longitude - base.longitude) < 1 }
         return busy ? .init(latitude: base.latitude - 2.5, longitude: base.longitude) : base
     }
+
+    nonisolated static func country(ofTimeZone id: String) -> String? {
+        let city = id.split(separator: "/").last.map(String.init) ?? id
+        if russianZones.contains(city) { return "RU" }
+        let byCity = ["Amsterdam": "NL", "Berlin": "DE", "Helsinki": "FI", "London": "GB", "Paris": "FR",
+                      "Warsaw": "PL", "Stockholm": "SE", "Istanbul": "TR", "Almaty": "KZ", "Dubai": "AE",
+                      "Singapore": "SG", "Tokyo": "JP", "New_York": "US", "Chicago": "US", "Denver": "US",
+                      "Los_Angeles": "US", "Tbilisi": "GE", "Yerevan": "AM", "Riga": "LV", "Vilnius": "LT",
+                      "Tallinn": "EE", "Kyiv": "UA", "Kiev": "UA", "Belgrade": "RS", "Prague": "CZ"]
+        return byCity[city]
+    }
+
+    private nonisolated static let russianZones: Set<String> = [
+        "Moscow", "Kaliningrad", "Samara", "Volgograd", "Saratov", "Ulyanovsk", "Astrakhan", "Kirov",
+        "Yekaterinburg", "Omsk", "Novosibirsk", "Barnaul", "Tomsk", "Novokuznetsk", "Krasnoyarsk",
+        "Irkutsk", "Chita", "Yakutsk", "Khandyga", "Vladivostok", "Ust-Nera", "Magadan", "Sakhalin",
+        "Srednekolymsk", "Kamchatka", "Anadyr", "Simferopol",
+    ]
 }
 
 /// The panel next to the map for the "this Mac" pin: which of our servers
@@ -88,9 +181,8 @@ struct MacInspector: View {
     var center: CLLocationCoordinate2D?
 
     var body: some View {
-        let servers = model.statuses.map(\.server)
-        let routes = mac.routes(servers)
-        let other = Array(mac.unknown(servers).prefix(12))
+        let routes = mac.routes(model.statuses)
+        let other = Array(mac.unknown(model.statuses).prefix(12))
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -109,7 +201,7 @@ struct MacInspector: View {
                         HStack(alignment: .firstTextBaseline) {
                             Image(systemName: "arrow.up.right").foregroundStyle(RouteStyle.macTint)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(model.status(r.toID)?.server.name ?? r.toID).lineLimit(1)
+                                Text(RouteStyle.path(r, model)).lineLimit(2)
                                 Text(RouteStyle.detail(r)).font(.caption).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
