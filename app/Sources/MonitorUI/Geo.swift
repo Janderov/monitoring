@@ -68,6 +68,12 @@ public final class ServerLocations: ObservableObject {
         return Country.detect(server)?.coordinate
     }
 
+    /// A place the user chose by hand, for pins that are not servers.
+    public func manual(_ id: String) -> CLLocationCoordinate2D? {
+        guard let p = overrides[id], p.count == 2 else { return nil }
+        return .init(latitude: p[0], longitude: p[1])
+    }
+
     /// Nil goes back to the country's default place.
     public func set(_ c: CLLocationCoordinate2D?, for serverID: String) {
         overrides[serverID] = c.map { [$0.latitude, $0.longitude] }
