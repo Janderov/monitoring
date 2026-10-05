@@ -310,7 +310,9 @@ func skipIface(name string) bool {
 	if name == "lo" {
 		return true
 	}
-	for _, p := range []string{"docker", "br-", "veth", "virbr", "tun", "wg", "awg"} {
+	// amn* is AmneziaWG's host-side interface when the container runs with
+	// host networking (seen on a real server as amn0).
+	for _, p := range []string{"docker", "br-", "veth", "virbr", "tun", "wg", "awg", "amn"} {
 		if strings.HasPrefix(name, p) {
 			return true
 		}

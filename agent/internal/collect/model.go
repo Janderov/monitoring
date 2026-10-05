@@ -12,9 +12,12 @@ type Process struct {
 
 // VPN is the state of one AmneziaVPN container.
 type VPN struct {
-	Container     string    `json:"container"`
-	Protocol      string    `json:"protocol"`
-	Running       bool      `json:"running"`
+	Container string `json:"container"`
+	Protocol  string `json:"protocol"`
+	Running   bool   `json:"running"`
+	// ClientsKnown is false for protocols whose clients the agent cannot
+	// read yet (xray, openvpn, socks5proxy); their counts are then zero.
+	ClientsKnown  bool      `json:"clients_known"`
 	Clients       int       `json:"clients"`
 	ActiveClients int       `json:"active_clients"`
 	RxBytes       uint64    `json:"rx_bytes"`

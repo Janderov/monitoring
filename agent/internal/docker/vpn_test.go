@@ -135,13 +135,13 @@ func TestVPNEndToEnd(t *testing.T) {
 		t.Fatalf("vpn = %+v, want awg and xray", got)
 	}
 	awg := got[0]
-	if awg.Error != "" || awg.Clients != 3 || awg.ActiveClients != 1 || awg.RxBytes != 1200 || awg.TxBytes != 5300 {
+	if awg.Error != "" || !awg.ClientsKnown || awg.Clients != 3 || awg.ActiveClients != 1 || awg.RxBytes != 1200 || awg.TxBytes != 5300 {
 		t.Errorf("awg = %+v", awg)
 	}
 	if awg.Peers[0].Name != "iPhone" {
 		t.Errorf("peer name = %q", awg.Peers[0].Name)
 	}
-	if got[1].Running || got[1].Protocol != "xray" {
+	if got[1].Running || got[1].Protocol != "xray" || got[1].ClientsKnown {
 		t.Errorf("xray = %+v", got[1])
 	}
 }
