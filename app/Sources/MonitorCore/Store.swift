@@ -56,6 +56,17 @@ public actor Store {
         CREATE TABLE domains (
           domain TEXT PRIMARY KEY, expiry INTEGER, error TEXT, checked_at INTEGER NOT NULL);
         """,
+        // Audit log: every change a person makes (add a server, create a VPN
+        // key, ...), allowed or refused, with who did it.
+        """
+        CREATE TABLE actions (
+          id TEXT PRIMARY KEY, ts INTEGER NOT NULL,
+          actor_id TEXT NOT NULL, actor_name TEXT NOT NULL,
+          kind TEXT NOT NULL, object_type TEXT NOT NULL, object_id TEXT NOT NULL, object_name TEXT NOT NULL,
+          detail TEXT NOT NULL DEFAULT '', result TEXT NOT NULL, error TEXT);
+        CREATE INDEX actions_ts ON actions (ts);
+        CREATE INDEX actions_object ON actions (object_id, ts);
+        """,
     ]
 
     public static var schemaVersion: Int { migrations.count }
@@ -269,6 +280,34 @@ public actor Store {
         public var severity: Severity
         public var message: String
         public var actor: String
+    }
+
+    public func addAction(_ a: AuditRecord) throws {
+        try db.prepare("""
+        INSERT OR REPLACE INTO actions
+          (id, ts, actor_id, actor_name, kind, object_type, object_id, object_name, detail, result, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """).run(.text(a.id), .int(Int64(a.time.timeIntervalSince1970)), .text(a.actor.id), .text(a.actor.name),
+                 .text(a.action.rawValue), .text(a.object.type.rawValue), .text(a.object.id), .text(a.object.name),
+                 .text(a.detail), .text(a.result.rawValue), a.error.map { .text($0) } ?? .null)
+    }
+
+    /// Newest first; `objectID` narrows to one server, site or VPN key. Kept
+    /// forever: it is small and is the answer to "who deleted this key".
+    public func actions(limit: Int = 200, objectID: String? = nil) throws -> [AuditRecord] {
+        let st = try db.prepare("""
+        SELECT id, ts, actor_id, actor_name, kind, object_type, object_id, object_name, detail, result, error
+        FROM actions WHERE ?1 IS NULL OR object_id = ?1 ORDER BY ts DESC, rowid DESC LIMIT ?2
+        """)
+        return try st.rows(objectID.map { .text($0) } ?? .null, .int(Int64(limit))).map { r in
+            AuditRecord(id: r.text(0) ?? "", time: Date(timeIntervalSince1970: TimeInterval(r.int(1) ?? 0)),
+                        actor: AppUser(id: r.text(2) ?? "", name: r.text(3) ?? ""),
+                        action: UserAction(rawValue: r.text(4) ?? "") ?? .view,
+                        object: ObjectRef(type: ObjectRef.Kind(rawValue: r.text(5) ?? "") ?? .server,
+                                          id: r.text(6) ?? "", name: r.text(7) ?? ""),
+                        detail: r.text(8) ?? "", result: AuditRecord.Result(rawValue: r.text(9) ?? "") ?? .failed,
+                        error: r.text(10))
+        }
     }
 
     public func events(limit: Int = 200, serverID: String? = nil) throws -> [LoggedEvent] {
