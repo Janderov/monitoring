@@ -333,6 +333,7 @@ public actor Poller {
             }
             let snap = try await client.snapshot(s)
             try await store.setLatest(s.id, snap)
+            try? await store.addVPNTraffic(s.id, snap)
             // Older agents report no interval and have no settings to change.
             if let interval, let current = snap.intervalS, current != interval {
                 try? await client.setInterval(s, seconds: interval)

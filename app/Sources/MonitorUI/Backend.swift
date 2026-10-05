@@ -19,6 +19,11 @@ public protocol MonitorBackend: AnyObject, Sendable {
     func hourly(_ serverID: String, from: Date, to: Date) async throws -> [Store.Hourly]
     func events(limit: Int, serverID: String?) async throws -> [Store.LoggedEvent]
     func siteSamples(_ siteID: String, from: Date, to: Date) async throws -> [Store.SiteSample]
+    /// Traffic per VPN client (by public key) over the local days touching [from, to].
+    func vpnTraffic(_ serverID: String, from: Date, to: Date) async throws -> [String: Store.VPNUsage]
+    /// One client's traffic per day, oldest first.
+    func vpnDaily(_ serverID: String, publicKey: String, from: Date, to: Date) async throws
+        -> [(day: Date, usage: Store.VPNUsage)]
 
     // Editing the server and site lists. Each change is saved and applied
     // (the poller picks it up) before the call returns.
@@ -119,6 +124,15 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
 
     public func siteSamples(_ siteID: String, from: Date, to: Date) async throws -> [Store.SiteSample] {
         try await store?.siteSamples(siteID, from: from, to: to) ?? []
+    }
+
+    public func vpnTraffic(_ serverID: String, from: Date, to: Date) async throws -> [String: Store.VPNUsage] {
+        try await store?.vpnTraffic(serverID, from: from, to: to) ?? [:]
+    }
+
+    public func vpnDaily(_ serverID: String, publicKey: String, from: Date, to: Date) async throws
+        -> [(day: Date, usage: Store.VPNUsage)] {
+        try await store?.vpnDaily(serverID, publicKey: publicKey, from: from, to: to) ?? []
     }
 
     // MARK: Editing servers.json
