@@ -76,6 +76,27 @@ final class ConfigRepositoryTests: XCTestCase {
         XCTAssertEqual(file.sites?.count, 0)
     }
 
+    func testSiteLoginGoesToSecretStore() async throws {
+        try Data(ServersFile.example.utf8).write(to: url)
+        let secrets = MemorySecrets()
+        let repo = ConfigRepository(url: url, secrets: secrets)
+        var site = SiteConfig(id: "shop", name: "Магазин", url: "https://shop.example.com",
+                              authUser: "u", authPassword: "s3cret")
+        try await repo.upsertSite(site)
+        XCTAssertFalse(try String(contentsOf: url, encoding: .utf8).contains("s3cret"))
+        XCTAssertEqual(try secrets.get(SecretKey.siteAuth("shop")), "s3cret")
+        let loaded = try await repo.load().sites?.first
+        XCTAssertEqual(loaded?.basicAuth, CheckTarget.BasicAuth(user: "u", password: "s3cret"))
+        let t = Poller.targets(for: ServerConfig(id: "nl", name: "NL", host: "h", token: token, fingerprint: fp),
+                               servers: [], sites: [loaded!])
+        XCTAssertEqual(t.first?.basicAuth?.user, "u")
+
+        site.authUser = nil
+        site.authPassword = nil
+        try await repo.upsertSite(site)
+        XCTAssertNil(try secrets.get(SecretKey.siteAuth("shop")))
+    }
+
     func testMissingTokenCanStillBeReplacedOrDeleted() async throws {
         let json = #"{"servers":[{"id":"nl","name":"NL","host":"h","port":9443,"fingerprint":"\#(fp)"}]}"#
         try Data(json.utf8).write(to: url)

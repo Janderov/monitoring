@@ -15,6 +15,7 @@ public protocol SecretStore: Sendable {
 public enum SecretKey {
     public static func agentToken(_ serverID: String) -> String { "agent-token:" + serverID }
     public static func sshPassword(_ serverID: String) -> String { "ssh-password:" + serverID }
+    public static func siteAuth(_ siteID: String) -> String { "site-auth:" + siteID }
 }
 
 public final class MemorySecrets: SecretStore, @unchecked Sendable {

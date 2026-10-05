@@ -37,6 +37,12 @@ public actor ConfigRepository {
             }
         }
         if moved { try write(file) }
+        if var sites = file.sites {
+            for i in sites.indices where sites[i].authUser != nil {
+                sites[i].authPassword = try secrets.get(SecretKey.siteAuth(sites[i].id))
+            }
+            file.sites = sites
+        }
         return file
     }
 
@@ -82,6 +88,11 @@ public actor ConfigRepository {
         if let i = sites.firstIndex(where: { $0.id == site.id }) { sites[i] = site } else { sites.append(site) }
         file.sites = sites
         try file.validate()
+        if site.authUser?.isEmpty == false, let password = site.authPassword, !password.isEmpty {
+            try secrets.set(password, for: SecretKey.siteAuth(site.id))
+        } else if site.authUser?.isEmpty ?? true {
+            try secrets.remove(SecretKey.siteAuth(site.id))
+        }
         try write(file)
         return file
     }
@@ -91,6 +102,7 @@ public actor ConfigRepository {
         var file = try read()
         file.sites?.removeAll { $0.id == id }
         try write(file)
+        try secrets.remove(SecretKey.siteAuth(id))
         return file
     }
 
