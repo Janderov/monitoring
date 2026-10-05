@@ -82,3 +82,17 @@ func health(status string) string {
 	}
 	return ""
 }
+
+// Pid returns the main process id of a running container (0 when stopped),
+// whose /proc/<pid>/net shows the container's own network namespace.
+func (c *Client) Pid(container string) (int, error) {
+	var info struct {
+		State struct {
+			Pid int `json:"Pid"`
+		} `json:"State"`
+	}
+	if err := c.getJSON("/containers/"+container+"/json", &info); err != nil {
+		return 0, err
+	}
+	return info.State.Pid, nil
+}

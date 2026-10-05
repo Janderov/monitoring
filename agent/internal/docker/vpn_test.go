@@ -30,6 +30,9 @@ func TestParseWGDump(t *testing.T) {
 	if !peers[0].Active || peers[0].RxBytes != 1000 || peers[0].TxBytes != 5000 {
 		t.Errorf("peer A = %+v", peers[0])
 	}
+	if peers[0].Endpoint != "198.51.100.1:5000" || peers[0].AllowedIPs != "10.8.1.2/32" || peers[1].Endpoint != "" {
+		t.Errorf("endpoints = %q %q %q", peers[0].Endpoint, peers[0].AllowedIPs, peers[1].Endpoint)
+	}
 	if peers[1].Active || peers[1].LatestHandshake == nil {
 		t.Errorf("peer B = %+v", peers[1])
 	}

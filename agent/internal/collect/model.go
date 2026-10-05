@@ -35,6 +35,23 @@ type VPNPeer struct {
 	Active          bool       `json:"active"`
 	RxBytes         uint64     `json:"rx_bytes"`
 	TxBytes         uint64     `json:"tx_bytes"`
+	// Endpoint is where the peer was last seen (ip:port). For a client that
+	// is its address; for an upstream server (a cascade) it is that server.
+	Endpoint string `json:"endpoint,omitempty"`
+	// AllowedIPs containing 0.0.0.0/0 means traffic leaves through this peer,
+	// i.e. the peer is the next hop of a cascade rather than a client.
+	AllowedIPs string `json:"allowed_ips,omitempty"`
+}
+
+// Link is outgoing traffic from this server to one public address: the host
+// or a container connecting out, e.g. an entry VPN server relaying to an exit.
+type Link struct {
+	RemoteIP    string   `json:"remote_ip"`
+	Ports       []int    `json:"ports"`
+	Protos      []string `json:"protos"`
+	Connections int      `json:"connections"`
+	// Via names where the connections come from: "host" or container names.
+	Via []string `json:"via"`
 }
 
 // Service is a local daemon check: is the process running, does the port answer.
