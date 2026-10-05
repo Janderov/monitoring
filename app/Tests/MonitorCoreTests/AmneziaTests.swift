@@ -93,10 +93,13 @@ final class FakeAmneziaSSH: SSHRunner, @unchecked Sendable {
             table = String(decoding: Data(base64Encoded: blocks[1])!, as: UTF8.self)
             return SSHOutput(status: 0, stdout: "ok\n", stderr: "")
         }
+        // Like the real script: `sect` prints "\n@@name\n" and `cat` copies the
+        // file as is, so a file without a final newline must still parse.
+        func sect(_ name: String) -> String { "\n@@\(name)\n" }
         var out = "dir=/opt/amnezia/awg\nconf=/opt/amnezia/awg/awg0.conf\ntool=awg\n"
-        out += "@@conf\n\(conf)\n@@clients\n\(table)\n@@serverpub\nSPUB=\n@@psk\nPSK=\n"
-        if script.contains("genkey") { out += "@@keys\nCPRIV=\nCPUB=\nOTHERPSK=\n" }
-        out += "@@end\n"
+        out += sect("conf") + conf + sect("clients") + table + sect("serverpub") + "SPUB=" + sect("psk") + "PSK=\n"
+        if script.contains("genkey") { out += sect("keys") + "CPRIV=\nCPUB=\nOTHERPSK=\n" }
+        out += sect("end")
         return SSHOutput(status: 0, stdout: out, stderr: "")
     }
 
@@ -140,6 +143,7 @@ final class AmneziaKeysTests: XCTestCase {
         try await keys.delete(container: "amnezia-awg2", publicKey: "CPUB=")
         XCTAssertFalse(ssh.conf.contains("CPUB="))
         XCTAssertNil(ClientsTable.entries(ssh.table)["CPUB="])
+        XCTAssertTrue(ssh.conf.hasSuffix("\n") && ssh.table.hasSuffix("\n"), "files end with a newline")
         let write = ssh.scripts.last!
         XCTAssertTrue(write.contains("cp -p \"$CONF\" \"$CONF.bak-$TS\""))
     }
