@@ -4,9 +4,9 @@ import XCTest
 
 final class IPLookupTests: XCTestCase {
     func testRIPE() {
-        let json = #"{"objectClassName":"ip network","handle":"103.54.16.0 - 103.54.19.255","name":"NL-NET","country":"nl"}"#
-        XCTAssertEqual(IPRDAP.parse(Data(json.utf8), ip: "103.54.19.175"),
-                       IPOwner(ip: "103.54.19.175", country: "NL", network: "NL-NET"))
+        let json = #"{"objectClassName":"ip network","handle":"192.0.2.0 - 192.0.2.255","name":"NL-NET","country":"nl"}"#
+        XCTAssertEqual(IPRDAP.parse(Data(json.utf8), ip: "192.0.2.110"),
+                       IPOwner(ip: "192.0.2.110", country: "NL", network: "NL-NET"))
     }
 
     func testARINCountryFromAddress() {
@@ -15,7 +15,7 @@ final class IPLookupTests: XCTestCase {
           {"objectClassName":"entity","vcardArray":["vcard",[["version",{},"text","4.0"],
             ["adr",{"label":"319 Clematis Street\nWest Palm Beach\nFL\n33401\nUnited States"},"text",["","","","","","",""]]]]}]}
         """#
-        XCTAssertEqual(IPRDAP.parse(Data(json.utf8), ip: "149.28.225.248")?.country, "US")
+        XCTAssertEqual(IPRDAP.parse(Data(json.utf8), ip: "192.0.2.130")?.country, "US")
         XCTAssertNil(IPRDAP.parse(Data(#"{"objectClassName":"domain"}"#.utf8), ip: "1.2.3.4"))
     }
 

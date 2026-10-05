@@ -6,14 +6,14 @@ final class SitesTests: XCTestCase {
     let now = AgentJSON.parseRFC3339("2026-10-05T10:00:00Z")!
 
     func testRegistrableDomain() {
-        XCTAssertEqual(DomainName.registrable("www.biotech.ru"), "biotech.ru")
+        XCTAssertEqual(DomainName.registrable("www.alpha-shop.ru"), "alpha-shop.ru")
         XCTAssertEqual(DomainName.registrable("shop.example.com"), "example.com")
         XCTAssertEqual(DomainName.registrable("a.b.example.co.uk"), "example.co.uk")
         XCTAssertEqual(DomainName.registrable("my.firm.msk.ru"), "firm.msk.ru")
-        XCTAssertNil(DomainName.registrable("155.212.164.127"))
+        XCTAssertNil(DomainName.registrable("192.0.2.121"))
         XCTAssertNil(DomainName.registrable("localhost"))
         XCTAssertNil(DomainName.registrable("пример.рф"))
-        XCTAssertEqual(DomainName.whoisServer(for: "biotech.ru"), "whois.tcinet.ru")
+        XCTAssertEqual(DomainName.whoisServer(for: "alpha-shop.ru"), "whois.tcinet.ru")
         XCTAssertNil(DomainName.whoisServer(for: "example.com"))
     }
 
@@ -30,7 +30,7 @@ final class SitesTests: XCTestCase {
     func testParseWhois() {
         let tcinet = """
         % TCI Whois Service. Terms of use:
-        domain:        BIOTECH.RU
+        domain:        ALPHA-SHOP.RU
         state:         REGISTERED, DELEGATED, VERIFIED
         created:       2004-01-01T10:00:00Z
         paid-till:     2026-10-15T21:00:00Z
@@ -145,14 +145,14 @@ final class DomainExpiryTests: XCTestCase {
         let fake = FakeDomains()
         let d = DomainExpiry(transport: fake)
         let t0 = Date(timeIntervalSince1970: 1_790_000_000)
-        let due = await d.due(["example.com", "biotech.ru"], now: t0)
-        XCTAssertEqual(due, ["biotech.ru", "example.com"])
+        let due = await d.due(["example.com", "alpha-shop.ru"], now: t0)
+        XCTAssertEqual(due, ["alpha-shop.ru", "example.com"])
         let com = await d.lookup("example.com", now: t0)
-        let ru = await d.lookup("biotech.ru", now: t0)
+        let ru = await d.lookup("alpha-shop.ru", now: t0)
         XCTAssertEqual(com.expiry, AgentJSON.parseRFC3339("2026-10-12T00:00:00Z"))
         XCTAssertEqual(ru.expiry, AgentJSON.parseRFC3339("2027-01-01T00:00:00Z"))
-        XCTAssertEqual(fake.calls, ["rdap example.com", "whois whois.tcinet.ru biotech.ru"])
-        let none = await d.due(["example.com", "biotech.ru"], now: t0.addingTimeInterval(3600))
+        XCTAssertEqual(fake.calls, ["rdap example.com", "whois whois.tcinet.ru alpha-shop.ru"])
+        let none = await d.due(["example.com", "alpha-shop.ru"], now: t0.addingTimeInterval(3600))
         XCTAssertEqual(none, [])
         let again = await d.due(["example.com"], now: t0.addingTimeInterval(13 * 3600))
         XCTAssertEqual(again, ["example.com"])

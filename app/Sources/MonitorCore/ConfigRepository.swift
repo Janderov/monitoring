@@ -124,7 +124,7 @@ public actor ConfigRepository {
 
 extension ServersFile {
     /// A short unused id for a new server or site, from its name or address:
-    /// "Нидерланды" -> "srv", "155.212.164.127" -> "155-212-164-127".
+    /// "Нидерланды" -> "srv", "192.0.2.121" -> "192-0-2-121".
     public func newID(from text: String, existing: [String], fallback: String) -> String {
         var base = ""
         for ch in text.lowercased() {
