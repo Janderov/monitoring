@@ -134,18 +134,20 @@ public actor AmneziaKeys {
         [ -f "$CONF" ] || { echo "no AmneziaWG config in /opt/amnezia" >&2; exit 1; }
         WG=wg; command -v awg >/dev/null 2>&1 && WG=awg
         IF=$(basename "$CONF" .conf)
+        # Section markers start on a fresh line even when a file has no final newline.
+        sect() { printf '\\n@@%s\\n' "$1"; }
 
         """
 
     private func read(_ container: String, newKeys: Bool) async throws -> State {
         let script = "set -e\n" + Self.locate + """
             echo "dir=$D"; echo "conf=$CONF"; echo "tool=$WG"
-            echo "@@conf"; cat "$CONF"
-            echo "@@clients"; cat "$D/clientsTable" 2>/dev/null || echo "[]"
-            echo "@@serverpub"; cat "$D/wireguard_server_public_key.key" 2>/dev/null || $WG show "$IF" public-key
-            echo "@@psk"; cat "$D/wireguard_psk.key" 2>/dev/null || true
-            \(newKeys ? "echo \"@@keys\"; K=$($WG genkey); echo \"$K\"; echo \"$K\" | $WG pubkey; $WG genpsk" : "")
-            echo "@@end"
+            sect conf; cat "$CONF"
+            sect clients; cat "$D/clientsTable" 2>/dev/null || echo "[]"
+            sect serverpub; cat "$D/wireguard_server_public_key.key" 2>/dev/null || $WG show "$IF" public-key
+            sect psk; cat "$D/wireguard_psk.key" 2>/dev/null || true
+            \(newKeys ? "sect keys; K=$($WG genkey); echo \"$K\"; echo \"$K\" | $WG pubkey; $WG genpsk" : "")
+            sect end
             """
         return try Self.parseState(try await exec(container, script))
     }
@@ -160,6 +162,8 @@ public actor AmneziaKeys {
                 head[String(line[..<i])] = String(line[line.index(after: i)...])
             }
         }
+        // Each marker is printed after an extra newline; drop that line again.
+        for (k, lines) in parts where lines.last == "" { parts[k] = Array(lines.dropLast()) }
         func text(_ k: String) -> String { (parts[k] ?? []).joined(separator: "\n") }
         func first(_ k: String) -> String? {
             (parts[k] ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty }
@@ -180,9 +184,11 @@ public actor AmneziaKeys {
 
     /// Replaces both files and applies the config; restores them on failure.
     private func write(_ container: String, state: State, conf: WGConfig, table: String) async throws {
-        let b64conf = Data(conf.text.utf8).base64EncodedString()
-        let b64strip = Data(conf.stripped().utf8).base64EncodedString()
-        let b64table = Data(table.utf8).base64EncodedString()
+        // Files end with a newline, as text files on Linux should.
+        func line(_ s: String) -> String { s.hasSuffix("\n") ? s : s + "\n" }
+        let b64conf = Data(line(conf.text).utf8).base64EncodedString()
+        let b64strip = Data(line(conf.stripped()).utf8).base64EncodedString()
+        let b64table = Data(line(table).utf8).base64EncodedString()
         let script = "set -e\n" + Self.locate + """
             [ "$CONF" = "\(state.confPath)" ] || { echo "config moved" >&2; exit 1; }
             TS=$(date +%Y%m%d-%H%M%S)
