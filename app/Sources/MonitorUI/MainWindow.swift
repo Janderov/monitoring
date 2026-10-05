@@ -5,6 +5,7 @@ import SwiftUI
 
 /// The main window: sidebar with sections, groups and tags; content on the right.
 public struct MainWindow: View {
+    @Environment(\.openWindow) private var openWindow
     public static let id = "main"
     @ObservedObject var model: AppModel
 
@@ -32,6 +33,10 @@ public struct MainWindow: View {
                             Label("Добавить", systemImage: "plus")
                         }
                         .help("Добавить сервер или сайт")
+                        Button { openWindow(id: SettingsView.id) } label: {
+                            Label("Настройки", systemImage: "gearshape")
+                        }
+                        .help("Настройки: обновления, токен GitHub, журнал действий")
                     }
                 }
         }
