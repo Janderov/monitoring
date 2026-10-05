@@ -18,6 +18,8 @@ struct EditSheetView: View {
         case .reinstallAgent(let id):
             if let s = model.status(id) { AddServerForm(model: model, reinstall: s.server) }
             else { Missing(title: "Сервер уже удалён") }
+        case .updateAgents:
+            UpdateAgentsSheet(model: model)
         case .addSite:
             SiteForm(model: model, original: nil)
         case .editSite(let id):

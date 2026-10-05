@@ -153,12 +153,13 @@ public final class AppModel: ObservableObject {
 }
 
 public enum EditSheet: Identifiable, Hashable, Sendable {
-    case addServer, editServer(String), reinstallAgent(String), addSite, editSite(String)
+    case addServer, editServer(String), reinstallAgent(String), updateAgents, addSite, editSite(String)
     public var id: String {
         switch self {
         case .addServer: return "add-server"
         case .editServer(let id): return "server-\(id)"
         case .reinstallAgent(let id): return "reinstall-\(id)"
+        case .updateAgents: return "update-agents"
         case .addSite: return "add-site"
         case .editSite(let id): return "site-\(id)"
         }
