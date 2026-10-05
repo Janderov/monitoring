@@ -13,6 +13,7 @@ struct MapScreen: View {
     @State private var center: CLLocationCoordinate2D?
     @State private var selectedPin: String?
     @AppStorage("map.links") private var showLinks = true
+    @AppStorage("map.routes") private var showRoutes = true
     @AppStorage("map.onlyProblems") private var onlyProblems = false
 
     init(model: AppModel) {
@@ -46,6 +47,7 @@ struct MapScreen: View {
 
     var body: some View {
         let pins = pins
+        let routes = showRoutes ? model.routes : []
         HStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
                 Map(position: $position, selection: $selectedPin) {
@@ -55,6 +57,21 @@ struct MapScreen: View {
                                 MapPolyline(coordinates: [a, b], contourStyle: .geodesic)
                                     .stroke(link.check.ok ? Color.secondary.opacity(0.6) : Color.red,
                                             style: StrokeStyle(lineWidth: 1.5, dash: link.check.ok ? [] : [5, 4]))
+                            }
+                        }
+                    }
+                    ForEach(routes) { r in
+                        if let a = coordinate(r.fromID), let b = coordinate(r.toID), !same(a, b) {
+                            // Straight on the map, so the arrow in the middle points along it.
+                            MapPolyline(coordinates: [a, b], contourStyle: .straight)
+                                .stroke(RouteStyle.color(r),
+                                        style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: r.kind == .relay ? [7, 5] : []))
+                            Annotation("", coordinate: RouteStyle.midpoint(a, b), anchor: .center) {
+                                Image(systemName: "arrowtriangle.right.fill")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(RouteStyle.color(r))
+                                    .rotationEffect(RouteStyle.angle(a, b))
+                                    .help(RouteStyle.describe(r, model))
                             }
                         }
                     }
@@ -87,7 +104,7 @@ struct MapScreen: View {
             }
         }
         .navigationTitle("Карта")
-        .navigationSubtitle("\(model.visible.count) серверов · линии: пинг между серверами")
+        .navigationSubtitle("\(model.visible.count) серверов" + (routes.isEmpty ? "" : " · маршрутов VPN: \(routes.count)"))
         .toolbar {
             ToolbarItem {
                 Picker("Показать", selection: $onlyProblems) {
@@ -114,9 +131,14 @@ struct MapScreen: View {
     private var layers: some View {
         VStack(alignment: .leading, spacing: 6) {
             Toggle("Связи и задержки", isOn: $showLinks)
-            Toggle("Маршруты VPN", isOn: .constant(false))
-                .disabled(true)
-                .help("Появится, когда агент научится видеть каскады между серверами")
+            Toggle("Маршруты VPN", isOn: $showRoutes)
+            if showRoutes {
+                HStack(spacing: 10) {
+                    routeLegend(dash: [], "туннель")
+                    routeLegend(dash: [4, 3], "пересылка")
+                }
+                .font(.caption)
+            }
             Divider()
             HStack(spacing: 12) {
                 legend(.ok, "в норме")
@@ -131,8 +153,63 @@ struct MapScreen: View {
         .fixedSize()
     }
 
+    private func routeLegend(dash: [CGFloat], _ t: String) -> some View {
+        HStack(spacing: 4) {
+            Path { p in p.move(to: .init(x: 0, y: 4)); p.addLine(to: .init(x: 18, y: 4)) }
+                .stroke(RouteStyle.tint, style: StrokeStyle(lineWidth: 2.5, dash: dash))
+                .frame(width: 18, height: 8)
+            Text(t).foregroundStyle(.secondary)
+        }
+    }
+
+    private func coordinate(_ serverID: String) -> CLLocationCoordinate2D? {
+        model.status(serverID).flatMap { locations.coordinate(for: $0.server) }
+    }
+
+    private func same(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Bool {
+        abs(a.latitude - b.latitude) < 0.01 && abs(a.longitude - b.longitude) < 0.01
+    }
+
     private func legend(_ l: ServerStatus.Level, _ t: String) -> some View {
         HStack(spacing: 4) { StatusDot(level: l); Text(t).foregroundStyle(.secondary) }
+    }
+}
+
+/// How a VPN route looks: one tint, solid for a tunnel, dashed for a relay,
+/// faded while idle.
+enum RouteStyle {
+    static let tint = Color.indigo
+
+    static func color(_ r: VPNRoute) -> Color { r.active ? tint : tint.opacity(0.35) }
+
+    static func midpoint(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
+        let y = (mercator(a.latitude) + mercator(b.latitude)) / 2
+        return .init(latitude: atan(sinh(y)) * 180 / .pi, longitude: (a.longitude + b.longitude) / 2)
+    }
+
+    /// Screen direction of a straight line on a north-up Mercator map.
+    static func angle(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Angle {
+        let dx = (b.longitude - a.longitude) * .pi / 180
+        let dy = mercator(b.latitude) - mercator(a.latitude)
+        return .radians(-atan2(dy, dx))
+    }
+
+    private static func mercator(_ lat: Double) -> Double {
+        log(tan(.pi / 4 + lat * .pi / 360))
+    }
+
+    static func detail(_ r: VPNRoute) -> String {
+        var parts = [r.kind == .tunnel ? "туннель" : "пересылка", r.active ? "активен" : "простаивает"]
+        if !r.via.isEmpty { parts.append(r.via.joined(separator: ", ")) }
+        if !r.ports.isEmpty { parts.append("порт " + r.ports.map(String.init).joined(separator: ", ")) }
+        if r.connections > 0 { parts.append("соединений: \(r.connections)") }
+        return parts.joined(separator: " · ")
+    }
+
+    @MainActor static func describe(_ r: VPNRoute, _ model: AppModel) -> String {
+        let from = model.status(r.fromID)?.server.name ?? r.fromID
+        let to = model.status(r.toID)?.server.name ?? r.toID
+        return "\(from) → \(to)\n" + detail(r)
     }
 }
 
@@ -201,6 +278,26 @@ private struct MapInspector: View {
                     }
                     if let verdict = verdict(s, reach) {
                         Text(verdict).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            let routes = model.routes(of: s.id)
+            if !routes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Маршруты VPN").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    ForEach(routes) { r in
+                        let outgoing = r.fromID == s.id
+                        let other = model.status(outgoing ? r.toID : r.fromID)?.server.name ?? (outgoing ? r.toID : r.fromID)
+                        HStack(alignment: .firstTextBaseline) {
+                            Image(systemName: outgoing ? "arrow.up.right" : "arrow.down.left")
+                                .foregroundStyle(RouteStyle.color(r))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text((outgoing ? "выход через " : "вход с ") + other).lineLimit(1)
+                                Text(RouteStyle.detail(r)).font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .font(.callout)
                     }
                 }
             }

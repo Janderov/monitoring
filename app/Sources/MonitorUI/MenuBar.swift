@@ -158,6 +158,7 @@ public struct MenuBarContent: View {
 
     private var footer: some View {
         VStack(spacing: 0) {
+            UpdateMenuRow(updates: model.updates)
             MenuButton(title: "Открыть окно", shortcut: "⌘0") { openMain() }
             MenuButton(title: "Настройки…", shortcut: "⌘,") {
                 NSApp.activate(ignoringOtherApps: true)
@@ -211,6 +212,27 @@ private struct HoverRow<Content: View, Hover: View>: View {
 extension HoverRow where Hover == EmptyView {
     init(action: @escaping () -> Void, @ViewBuilder content: () -> Content) {
         self.init(action: action, content: content, hover: { EmptyView() })
+    }
+}
+
+/// Shown only when a newer build is waiting or being downloaded.
+private struct UpdateMenuRow: View {
+    @ObservedObject var updates: UpdateModel
+
+    var body: some View {
+        switch updates.state {
+        case .available:
+            MenuButton(title: "Установить обновление", shortcut: "") { Task { await updates.install() } }
+        case .downloading:
+            HStack {
+                Text("Скачиваю обновление…").foregroundStyle(.secondary)
+                Spacer()
+                ProgressView().controlSize(.small)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 4)
+        default:
+            EmptyView()
+        }
     }
 }
 

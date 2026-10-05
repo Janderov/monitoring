@@ -19,9 +19,12 @@ public final class AppModel: ObservableObject {
     @Published public var selectedSiteID: String?
     /// Sidebar filter by group or tag; nil shows everything.
     @Published public var filter: Filter?
+    /// The add or edit form shown over the main window.
+    @Published public var sheet: EditSheet?
 
     public let backend: MonitorBackend
     public let locations: ServerLocations
+    public let updates: UpdateModel
 
     public var overall: ServerStatus.Level {
         if configError != nil { return .warning }
@@ -41,6 +44,7 @@ public final class AppModel: ObservableObject {
     public init(backend: MonitorBackend) {
         self.backend = backend
         self.locations = ServerLocations()
+        self.updates = UpdateModel(secrets: KeychainSecrets(), backend: backend)
         Task { await start() }
     }
 
@@ -74,9 +78,11 @@ public final class AppModel: ObservableObject {
 
     public func pollNow() async { await backend.pollNow() }
 
-    /// Single permission check for every action. There is one user (the
-    /// owner) today, so everything is allowed; roles plug in here later.
-    public func can(_ action: UserAction, _ server: ServerConfig? = nil) -> Bool { true }
+    /// Single permission check for every button. The rules live in the
+    /// core's Access; today the only user is the owner.
+    public func can(_ action: UserAction, _ server: ServerConfig? = nil) -> Bool {
+        Access.can(.owner, action, server.map(ObjectRef.server))
+    }
 
     public func status(_ id: String) -> ServerStatus? { statuses.first { $0.id == id } }
 
@@ -85,13 +91,17 @@ public final class AppModel: ObservableObject {
     /// Opens Terminal with an SSH session (Terminal handles ssh:// links).
     public func openSSH(_ server: ServerConfig) {
         guard can(.ssh, server) else { return }
-        let user = UserDefaults.standard.string(forKey: "sshUser.\(server.id)")
+        let user = server.ssh?.user ?? UserDefaults.standard.string(forKey: "sshUser.\(server.id)")
             ?? UserDefaults.standard.string(forKey: "sshUser.default") ?? "root"
         var c = URLComponents()
         c.scheme = "ssh"
         c.user = user
         c.host = server.host
-        if let url = c.url { NSWorkspace.shared.open(url) }
+        c.port = server.ssh?.port.flatMap { $0 == 22 ? nil : $0 }
+        guard let url = c.url else { return }
+        NSWorkspace.shared.open(url)
+        let backend = backend
+        Task { _ = try? await backend.audited(.ssh, on: .server(server), detail: "\(user)@\(server.host)") {} }
     }
 
     public func copyAddress(_ server: ServerConfig) {
@@ -99,10 +109,56 @@ public final class AppModel: ObservableObject {
         NSPasteboard.general.setString(server.host, forType: .string)
     }
 
+    // MARK: Editing
+
+    public var siteConfigs: [SiteConfig] { siteStatuses.map(\.site) }
+
+    /// Opens the add/edit form in the main window (also from the menu bar).
+    public func present(_ sheet: EditSheet) { self.sheet = sheet }
+
+    /// A short readable id for a new server, from its name or address.
+    public func newServerID(from text: String) -> String {
+        ServersFile(servers: statuses.map(\.server), sites: siteConfigs).newServerID(from: text)
+    }
+
+    public func save(server: ServerConfig) async throws {
+        try await backend.upsertServer(server)
+        configError = nil
+    }
+
+    public func delete(server id: String) async throws {
+        try await backend.removeServer(id: id)
+        if selectedServerID == id { selectedServerID = nil }
+        locations.set(nil, for: id)
+    }
+
+    public func save(site: SiteConfig) async throws {
+        try await backend.upsertSite(site)
+        configError = nil
+    }
+
+    public func delete(site id: String) async throws {
+        try await backend.removeSite(id: id)
+        if selectedSiteID == id { selectedSiteID = nil }
+    }
+
     public func openConfig() { NSWorkspace.shared.open(DataFolder.serversFile) }
     public func openDataFolder() { NSWorkspace.shared.open(DataFolder.url) }
 
     private func describe(_ error: Error) -> String { String(describing: error) }
+}
+
+public enum EditSheet: Identifiable, Hashable, Sendable {
+    case addServer, editServer(String), reinstallAgent(String), addSite, editSite(String)
+    public var id: String {
+        switch self {
+        case .addServer: return "add-server"
+        case .editServer(let id): return "server-\(id)"
+        case .reinstallAgent(let id): return "reinstall-\(id)"
+        case .addSite: return "add-site"
+        case .editSite(let id): return "site-\(id)"
+        }
+    }
 }
 
 public enum AppSection: Hashable, Sendable {

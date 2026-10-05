@@ -23,16 +23,22 @@ public struct MainWindow: View {
                         }
                         .help("Опросить сейчас (⌘R)")
                         Menu {
+                            Button("Сервер…") { model.present(.addServer) }
+                            Button("Сайт…") { model.present(.addSite) }
+                            Divider()
                             Button("Открыть servers.json") { model.openConfig() }
-                            Button("Перечитать список серверов") { Task { await model.reload() } }
+                            Button("Перечитать servers.json") { Task { await model.reload() } }
                         } label: {
-                            Label("Добавить сервер", systemImage: "plus")
+                            Label("Добавить", systemImage: "plus")
                         }
-                        .help("Пока серверы добавляются в servers.json; форма появится следующим шагом")
+                        .help("Добавить сервер или сайт")
                     }
                 }
         }
         .frame(minWidth: 1060, minHeight: 600)
+        .sheet(item: $model.sheet) { sheet in
+            EditSheetView(model: model, sheet: sheet)
+        }
     }
 
     @ViewBuilder private var detail: some View {
@@ -141,6 +147,10 @@ public struct MonitorCommands: Commands {
             Divider()
             Button("Опросить сейчас") { Task { await model.pollNow() } }.keyboardShortcut("r")
         }
+        CommandGroup(after: .newItem) {
+            Button("Добавить сервер…") { model.present(.addServer) }.keyboardShortcut("n")
+            Button("Добавить сайт…") { model.present(.addSite) }.keyboardShortcut("n", modifiers: [.command, .shift])
+        }
         CommandMenu("Сервер") {
             Button("Открыть SSH") {
                 if let id = model.selectedServerID, let s = model.status(id) { model.openSSH(s.server) }
@@ -151,6 +161,16 @@ public struct MonitorCommands: Commands {
                 if let id = model.selectedServerID, let s = model.status(id) { model.copyAddress(s.server) }
             }
             .disabled(model.selectedServerID == nil)
+            Divider()
+            Button("Изменить…") {
+                if let id = model.selectedServerID { model.present(.editServer(id)) }
+            }
+            .keyboardShortcut("e")
+            .disabled(model.selectedServerID == nil)
+            Button("Переустановить агента…") {
+                if let id = model.selectedServerID { model.present(.reinstallAgent(id)) }
+            }
+            .disabled(model.selectedServerID == nil || !model.backend.canInstallAgent)
         }
     }
 
