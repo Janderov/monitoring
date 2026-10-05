@@ -50,15 +50,14 @@ struct ServerDetail: View {
                     Label(e, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }
                 facts
-                HStack {
-                    Picker("Раздел", selection: $tab) {
-                        ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    Spacer()
-                    if tab == .metrics {
+                Picker("Раздел", selection: $tab) {
+                    ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                if tab == .metrics {
+                    HStack {
+                        Spacer()
                         Picker("Период", selection: $period) {
                             ForEach(Period.allCases) { p in Text(p.rawValue).tag(p) }
                         }
@@ -70,6 +69,7 @@ struct ServerDetail: View {
                 content
             }
             .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -77,10 +77,10 @@ struct ServerDetail: View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
-                    Text(status.server.name).font(.title2.weight(.semibold))
+                    Text(status.server.name).font(.title2.weight(.semibold)).lineLimit(1)
                     StatusBadge(level: status.level)
                 }
-                Text(subtitle).foregroundStyle(.secondary).monospacedDigit().textSelection(.enabled)
+                Text(subtitle).foregroundStyle(.secondary).monospacedDigit().lineLimit(2).textSelection(.enabled)
             }
             Spacer()
             if model.can(.ssh, status.server) {
@@ -106,8 +106,10 @@ struct ServerDetail: View {
     }
 
     private var facts: some View {
-        Grid(alignment: .leading, horizontalSpacing: 24) {
-            GridRow {
+        // Wraps onto more rows when the pane is narrow.
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 20, alignment: .leading)],
+                  alignment: .leading, spacing: 10) {
+            Group {
                 Fact(title: "Аптайм", value: snap.map { Fmt.duration($0.uptimeSeconds) } ?? "—")
                 Fact(title: "Load 1 · 5 · 15",
                      value: snap.map { String(format: "%.2f · %.2f · %.2f", $0.load.one, $0.load.five, $0.load.fifteen) } ?? "—")

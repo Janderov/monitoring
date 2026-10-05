@@ -41,7 +41,7 @@ struct SitesScreen: View {
         let sites = model.sites
         HSplitView {
             SitesTable(model: model, sites: sites, selection: $model.selectedSiteID)
-                .frame(minWidth: 340, idealWidth: 420)
+                .frame(minWidth: 320, idealWidth: 420, maxWidth: 560)
             Group {
                 if let id = model.selectedSiteID, let site = sites.first(where: { $0.id == id }) {
                     SiteDetail(site: site)
@@ -52,7 +52,8 @@ struct SitesScreen: View {
                     EmptyNote(title: "Выберите сайт")
                 }
             }
-            .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(1)
         }
         .navigationTitle("Сайты")
         .navigationSubtitle("\(sites.count) · проверка раз в минуту с серверов")
@@ -68,7 +69,7 @@ private struct SiteDetail: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 8) {
-                            Text(site.name).font(.title2.weight(.semibold))
+                            Text(site.name).font(.title2.weight(.semibold)).lineLimit(1)
                             StatusBadge(level: site.level())
                         }
                         Text(site.url).foregroundStyle(.secondary).textSelection(.enabled)
@@ -81,8 +82,9 @@ private struct SiteDetail: View {
                 if let p = site.problem {
                     AlertStrip(level: site.level(), text: p, trailing: nil)
                 }
-                Grid(alignment: .leading, horizontalSpacing: 24) {
-                    GridRow {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 20, alignment: .leading)],
+                          alignment: .leading, spacing: 10) {
+                    Group {
                         Fact(title: "Отвечают", value: "\(site.origins.filter(\.check.ok).count) из \(site.origins.count)")
                         Fact(title: "Среднее время ответа", value: site.averageLatency.map(Fmt.ms) ?? "—")
                         Fact(title: "SSL до", value: site.tlsExpiry.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "—")
@@ -110,6 +112,7 @@ private struct SiteDetail: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

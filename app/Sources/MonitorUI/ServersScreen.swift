@@ -12,7 +12,7 @@ struct ServersScreen: View {
     var body: some View {
         HSplitView {
             table
-                .frame(minWidth: 380, idealWidth: 460)
+                .frame(minWidth: 320, idealWidth: 420, maxWidth: 560)
             Group {
                 if let id = model.selectedServerID, let s = model.status(id) {
                     ServerDetail(model: model, status: s)
@@ -22,7 +22,8 @@ struct ServersScreen: View {
                               detail: model.statuses.isEmpty ? "Добавьте их в servers.json (кнопка «+» в панели)" : nil)
                 }
             }
-            .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(1)
         }
         .navigationTitle(model.filter.map(filterTitle) ?? "Серверы")
         .navigationSubtitle(subtitle)
