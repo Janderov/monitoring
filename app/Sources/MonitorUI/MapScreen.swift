@@ -10,6 +10,7 @@ struct MapScreen: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var locations: ServerLocations
     @ObservedObject private var mac: MacLinksModel
+    @ObservedObject private var external: ExternalOwners
     @State private var position: MapCameraPosition = .automatic
     @State private var center: CLLocationCoordinate2D?
     @State private var selectedPin: String?
@@ -17,11 +18,13 @@ struct MapScreen: View {
     @AppStorage("map.routes") private var showRoutes = true
     @AppStorage("map.onlyProblems") private var onlyProblems = false
     @AppStorage("map.mac") private var showMac = true
+    @AppStorage("map.external") private var showExternal = true
 
     init(model: AppModel) {
         self.model = model
         self.locations = model.locations
         self.mac = model.mac
+        self.external = model.external
     }
 
     /// Servers sharing a place become one pin with a number.
@@ -57,6 +60,8 @@ struct MapScreen: View {
         let routes = showRoutes ? model.routes : []
         let macAt = macCoordinate(pins)
         let macRoutes = showMac ? mac.routes(model.statuses.map(\.server)) : []
+        let hops = showExternal ? ExternalHop.compute(model).filter { showMac || $0.fromID != MacLinksModel.pinID } : []
+        let extPins = ExternalPin.group(hops, owners: external.owners, avoiding: pins.map(\.coordinate))
         HStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
                 Map(position: $position, selection: $selectedPin) {
@@ -110,6 +115,25 @@ struct MapScreen: View {
                             }
                         }
                     }
+                    ForEach(extPins) { pin in
+                        ForEach(pin.hops) { h in
+                            if let a = h.fromID == MacLinksModel.pinID ? Optional(macAt) : coordinate(h.fromID), !same(a, pin.coordinate) {
+                                MapPolyline(coordinates: [a, pin.coordinate], contourStyle: .straight)
+                                    .stroke(Color.gray.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                            }
+                        }
+                        Annotation(pin.country.name, coordinate: pin.coordinate, anchor: .center) {
+                            Image(systemName: "questionmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 20, height: 20)
+                                .background(Color.gray, in: Circle())
+                                .overlay(Circle().strokeBorder(.white, lineWidth: 2))
+                                .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
+                                .help(pin.hops.map(\.ip).joined(separator: ", "))
+                        }
+                        .tag(pin.id)
+                    }
                     if showMac {
                         Annotation("Этот Mac", coordinate: macAt, anchor: .center) {
                             Image(systemName: "laptopcomputer")
@@ -140,7 +164,11 @@ struct MapScreen: View {
                 layers
                     .padding(12)
             }
-            if selectedPin == MacLinksModel.pinID, showMac {
+            if let id = selectedPin, let pin = extPins.first(where: { $0.id == id }) {
+                Divider()
+                ExternalInspector(model: model, pin: pin, owners: external.owners)
+                    .frame(width: 300)
+            } else if selectedPin == MacLinksModel.pinID, showMac {
                 Divider()
                 MacInspector(model: model, mac: mac, center: center)
                     .frame(width: 300)
@@ -174,6 +202,9 @@ struct MapScreen: View {
         .task(id: showMac) {
             if showMac { await mac.run() }
         }
+        .task(id: hops.map(\.ip)) {
+            await external.resolve(hops.map(\.ip))
+        }
         .onAppear {
             // Opening the map from a server's menu selects its pin.
             if let id = model.selectedServerID, let pin = pins.first(where: { $0.statuses.contains { $0.id == id } }) {
@@ -199,6 +230,7 @@ struct MapScreen: View {
                 }
                 .font(.caption)
             }
+            Toggle("Чужие узлы", isOn: $showExternal)
             Toggle("Этот Mac", isOn: $showMac)
             if showMac {
                 HStack(spacing: 4) {

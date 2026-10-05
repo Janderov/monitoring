@@ -27,6 +27,8 @@ public final class AppModel: ObservableObject {
     public let updates: UpdateModel
     /// This Mac's own connections to the servers, for the map.
     public let mac = MacLinksModel()
+    /// Country and network of addresses outside the app, for grey map pins.
+    let external = ExternalOwners(lookup: IPLookup())
 
     public var overall: ServerStatus.Level {
         if configError != nil { return .warning }
