@@ -194,15 +194,37 @@ public struct MonitorCommands: Commands {
 
 /// A menu bar app's windows can't go full screen by default, so the green
 /// button only zoomed. This lets it open the window full screen like any app.
+/// The behavior is set as soon as the view joins its window and again each
+/// time the window comes forward, since SwiftUI may reset it when it shows
+/// the window; a one-off async set could run before the window existed.
 private struct FullScreenCapable: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { view.window?.collectionBehavior.insert(.fullScreenPrimary) }
-        return view
-    }
+    func makeNSView(context: Context) -> NSView { HookView() }
+    func updateNSView(_ view: NSView, context: Context) { HookView.allowFullScreen(view.window) }
 
-    func updateNSView(_ view: NSView, context: Context) {
-        view.window?.collectionBehavior.insert(.fullScreenPrimary)
+    final class HookView: NSView {
+        private var observers: [NSObjectProtocol] = []
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            for o in observers { NotificationCenter.default.removeObserver(o) }
+            observers = []
+            guard let window else { return }
+            Self.allowFullScreen(window)
+            DispatchQueue.main.async { Self.allowFullScreen(window) }
+            for name in [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { _ in
+                    MainActor.assumeIsolated { Self.allowFullScreen(window) }
+                })
+            }
+        }
+
+        static func allowFullScreen(_ window: NSWindow?) {
+            guard let window else { return }
+            var b = window.collectionBehavior
+            b.remove([.fullScreenNone, .fullScreenAuxiliary])
+            b.insert(.fullScreenPrimary)
+            if b != window.collectionBehavior { window.collectionBehavior = b }
+        }
     }
 }
 #endif
