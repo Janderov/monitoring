@@ -268,6 +268,7 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
         try await audited(.restart, on: .server(server), detail: "перезагрузка сервера") {
             try await control.reboot()
         }
+        await poller?.markRebooting(server.id)
     }
 }
 
