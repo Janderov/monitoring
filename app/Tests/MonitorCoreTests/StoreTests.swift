@@ -105,9 +105,9 @@ final class StoreTests: XCTestCase {
           VALUES ('site-t', 1, 'down', 'fired', 2, 'сайт t недоступен: 401 Unauthorized');
         INSERT INTO events (server_id, ts, key, kind, severity, message)
           VALUES ('site-t', 2, 'down', 'fired', 2, 'сайт t недоступен: 502 Bad Gateway');
-        PRAGMA user_version = \(Store.schemaVersion - 1);
         """)
-        _ = try Store(path: path)
+        // The cleanup is the fifth migration; run it on these old rows.
+        try db.exec(Store.migrations[4])
         let ok = try db.prepare("SELECT ok FROM site_samples ORDER BY ts").rows().map { $0.int(0) }
         XCTAssertEqual(ok, [1, 0])
         let left = try db.prepare("SELECT message FROM events").rows().map { $0.text(0) }
