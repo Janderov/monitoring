@@ -272,6 +272,9 @@ final class AdminLockTests: XCTestCase {
         let s = await lock.status()
         XCTAssertTrue(s.unlockedByRecovery)
         try await lock.authorize(.restart)
+        await lock.check()
+        let still = await lock.status()
+        XCTAssertEqual(still.state, .unlocked, "no token needed after a recovery unlock")
 
         _ = tokens.insert("NEW", pin: "13579246")
         let fresh = try await lock.enroll(pin: "13579246")
@@ -280,6 +283,29 @@ final class AdminLockTests: XCTestCase {
         let s2 = await lock.status()
         XCTAssertEqual(s2.keyID, "NEW")
         XCTAssertFalse(s2.unlockedByRecovery)
+    }
+
+    func testRecoveryUnlockExpiresWhenIdle() async throws {
+        let tokens = FakeTokens()
+        _ = tokens.insert("LOST")
+        let secrets = MemorySecrets()
+        let clock = TestClock()
+        let code = try await AdminLock(key: RutokenLiteKey(driver: tokens), secrets: secrets, now: { clock.now })
+            .enroll(pin: "12345678").recoveryCode
+        let lock = AdminLock(key: RutokenLiteKey(driver: tokens), secrets: secrets, now: { clock.now })
+        _ = try await lock.unlock(pin: "12345678")
+        clock.advance(AdminLock.recoveryIdle * 4)
+        await lock.check()
+        var s = await lock.status()
+        XCTAssertEqual(s.state, .unlocked, "a token unlock does not time out")
+
+        await lock.lock()
+        tokens.pull("LOST")
+        try await lock.unlock(recoveryCode: code)
+        clock.advance(AdminLock.recoveryIdle + 1)
+        await lock.check()
+        s = await lock.status()
+        XCTAssertEqual(s.state, .locked)
     }
 
     func testEnrollNeedsOneTokenAndUnlockedApp() async throws {

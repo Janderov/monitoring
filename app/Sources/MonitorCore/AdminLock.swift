@@ -184,6 +184,9 @@ public struct EnrollResult: Equatable, Sendable {
 
 public actor AdminLock {
     public static let factoryPIN = "12345678"
+    /// A recovery-code unlock (no token in the reader) expires after this
+    /// long without changes. A token unlock lasts while the token is in.
+    public static let recoveryIdle: TimeInterval = 15 * 60
 
     private let key: AdminKey
     private let secrets: SecretStore
@@ -366,8 +369,8 @@ public actor AdminLock {
     }
 
     private func expired() -> Bool {
-        guard let idle else { return false }
-        return now().timeIntervalSince(lastActivity) > idle
+        guard let limit = byRecovery ? min(idle ?? Self.recoveryIdle, Self.recoveryIdle) : idle else { return false }
+        return now().timeIntervalSince(lastActivity) > limit
     }
 
     private func refreshPresence() {
