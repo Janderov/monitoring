@@ -95,6 +95,19 @@ public final class ServerLocations: ObservableObject {
         return .init(latitude: p[0], longitude: p[1])
     }
 
+    /// The pin was placed by hand rather than by its country.
+    public func isMoved(_ id: String) -> Bool { (overrides[id]?.count ?? 0) == 2 }
+
+    /// Once per install: servers whose country is known go back to its place.
+    /// A stray «Переместить в центр карты» had moved the US server into the
+    /// Atlantic before there was a way to undo it.
+    public func resetMovedOnce(_ servers: [ServerConfig]) {
+        let flag = "serverLocations.reset1"
+        guard !servers.isEmpty, !UserDefaults.standard.bool(forKey: flag) else { return }
+        for s in servers where isMoved(s.id) && Country.detect(s) != nil { set(nil, for: s.id) }
+        UserDefaults.standard.set(true, forKey: flag)
+    }
+
     /// Nil goes back to the country's default place.
     public func set(_ c: CLLocationCoordinate2D?, for serverID: String) {
         overrides[serverID] = c.map { [$0.latitude, $0.longitude] }

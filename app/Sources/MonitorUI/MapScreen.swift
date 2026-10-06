@@ -112,6 +112,7 @@ struct MapScreen: View {
         .onChange(of: spots.map(\.ip), initial: true) { _, ips in external.request(ips, first: true) }
         .onChange(of: hops.map(\.ip), initial: true) { _, ips in external.request(ips) }
         .onAppear {
+            locations.resetMovedOnce(model.visible.map(\.server))
             // Opening the map from a server's menu selects its pin.
             if let id = model.selectedServerID, let pin = pins.first(where: { $0.statuses.contains { $0.id == id } }) {
                 selectedPin = pin.id
@@ -484,6 +485,8 @@ private struct MapInspector: View {
     @ObservedObject var model: AppModel
     var statuses: [ServerStatus]
     var center: CLLocationCoordinate2D?
+    /// The server whose pin is about to move to the map's center, and where.
+    @State private var confirmMove: (id: String, to: CLLocationCoordinate2D)?
 
     var body: some View {
         ScrollView {
@@ -563,9 +566,24 @@ private struct MapInspector: View {
                 }
                 Button("Открыть сервер") { model.show(server: s.id) }
             }
-            if let center, model.can(.editConfig, s.server) {
-                Button("Переместить в центр карты") { model.locations.set(center, for: s.id) }
-                    .buttonStyle(.link).font(.caption)
+            if model.can(.editConfig, s.server) {
+                HStack(spacing: 12) {
+                    if let center {
+                        Button("Переместить в центр карты…") { confirmMove = (s.id, center) }
+                    }
+                    // A pin moved by hand stays there until put back; the
+                    // country's place is the default.
+                    if model.locations.isMoved(s.id), Country.detect(s.server) != nil {
+                        Button("Вернуть на место") { model.locations.set(nil, for: s.id) }
+                    }
+                }
+                .buttonStyle(.link).font(.caption)
+                .confirmationDialog("Переместить «\(s.server.name)» в центр карты?",
+                                    isPresented: Binding(get: { confirmMove?.id == s.id }, set: { if !$0 { confirmMove = nil } })) {
+                    Button("Переместить") { if let c = confirmMove { model.locations.set(c.to, for: c.id) } }
+                } message: {
+                    Text("Точка сервера останется там, пока вы не нажмёте «Вернуть на место».")
+                }
             }
         }
     }
