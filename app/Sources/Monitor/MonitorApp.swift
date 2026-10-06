@@ -40,7 +40,7 @@ struct MonitorApp: App {
             MenuBarContent(model: model)
                 .background(ReopenHook())
         } label: {
-            Image(nsImage: MenuBarIcon.image(for: model.overall))
+            Image(nsImage: MenuBarIcon.image(for: model.showsLockScreen ? .ok : model.overall, locked: model.showsLockScreen))
         }
         .menuBarExtraStyle(.window)
     }

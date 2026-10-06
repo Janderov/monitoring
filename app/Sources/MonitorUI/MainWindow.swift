@@ -12,6 +12,19 @@ public struct MainWindow: View {
     public init(model: AppModel) { self.model = model }
 
     public var body: some View {
+        Group {
+            // Locked by the admin key: the token prompt replaces the whole
+            // window, so no server or data is drawn at all.
+            if model.showsLockScreen { LockScreen(model: model) } else { content }
+        }
+        .frame(minWidth: 1060, minHeight: 600)
+        .background(FullScreenCapable())
+        .sheet(item: $model.sheet) { sheet in
+            EditSheetView(model: model, sheet: sheet)
+        }
+    }
+
+    private var content: some View {
         NavigationSplitView {
             Sidebar(model: model)
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
@@ -19,6 +32,7 @@ public struct MainWindow: View {
             detail
                 .toolbar {
                     ToolbarItemGroup(placement: .primaryAction) {
+                        AdminLockButton(model: model)
                         Button { Task { await model.pollNow() } } label: {
                             Label("Опросить сейчас", systemImage: "arrow.clockwise")
                         }
@@ -45,11 +59,6 @@ public struct MainWindow: View {
                         .help("Настройки: обновления, токен GitHub, журнал действий")
                     }
                 }
-        }
-        .frame(minWidth: 1060, minHeight: 600)
-        .background(FullScreenCapable())
-        .sheet(item: $model.sheet) { sheet in
-            EditSheetView(model: model, sheet: sheet)
         }
     }
 
@@ -158,6 +167,10 @@ public struct MonitorCommands: Commands {
             Button("Журнал") { go(.journal) }.keyboardShortcut("7")
             Divider()
             Button("Опросить сейчас") { Task { await model.pollNow() } }.keyboardShortcut("r")
+            if model.admin?.state == .unlocked {
+                Divider()
+                Button("Заблокировать") { model.lockNow() }.keyboardShortcut("l", modifiers: [.command, .control])
+            }
         }
         CommandGroup(after: .newItem) {
             Button("Добавить сервер…") { model.present(.addServer) }.keyboardShortcut("n")
