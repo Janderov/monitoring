@@ -83,6 +83,13 @@ final class FakeTokens: TokenDriver, @unchecked Sendable {
     }
 }
 
+final class Recorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [AdminLockStatus] = []
+    func add(_ s: AdminLockStatus) { lock.withLock { items.append(s) } }
+    var all: [AdminLockStatus] { lock.withLock { items } }
+}
+
 final class TestClock: @unchecked Sendable {
     private let lock = NSLock()
     private var t = Date(timeIntervalSince1970: 1_800_000_000)
@@ -130,8 +137,10 @@ final class AdminLockTests: XCTestCase {
         let status2 = await again.status()
         XCTAssertEqual(status2.state, .locked)
         do { try await again.authorize(.manageVPNKeys); XCTFail() } catch { XCTAssertEqual(error as? AdminLockError, .locked) }
-        try await again.authorize(.view)
-        try await again.authorize(.ssh)
+        for action in [UserAction.view, .ssh] {
+            do { try await again.authorize(action); XCTFail("\(action) while locked") } catch {}
+        }
+        try await again.authorize(.adminLogin)
 
         do { _ = try await again.unlock(pin: "000000"); XCTFail() } catch {
             XCTAssertEqual(error as? TokenError, .wrongPIN(finalTry: false))
@@ -165,6 +174,51 @@ final class AdminLockTests: XCTestCase {
         await lock.check()
         let s2 = await lock.status()
         XCTAssertEqual(s2.state, .locked)
+    }
+
+    func testWatchingSeesTheTokenGoInAndOut() async throws {
+        let tokens = FakeTokens()
+        let mine = tokens.insert("MINE")
+        let secrets = MemorySecrets()
+        _ = try await AdminLock(key: RutokenLiteKey(driver: tokens), secrets: secrets).enroll(pin: "12345678")
+        tokens.pull("MINE")
+
+        let lock = AdminLock(key: RutokenLiteKey(driver: tokens), secrets: secrets)
+        let seen = Recorder()
+        await lock.setOnChange { seen.add($0) }
+        await lock.check()
+        var s = await lock.status()
+        XCTAssertEqual(s.state, .locked)
+        XCTAssertEqual(s.presence, .none)
+
+        _ = tokens.insert("OTHER")
+        await lock.check()
+        s = await lock.status()
+        XCTAssertEqual(s.presence, .other)
+        tokens.pull("OTHER")
+
+        tokens.inserted.append(mine)
+        await lock.check()
+        s = await lock.status()
+        XCTAssertEqual(s.presence, .mine)
+        XCTAssertEqual(seen.all.map(\.presence), [.other, .mine], "the lock screen hears every change")
+
+        _ = try await lock.unlock(pin: "12345678")
+        await lock.check()
+        s = await lock.status()
+        XCTAssertEqual(s.state, .unlocked, "no idle timeout by default")
+
+        tokens.pull("MINE")
+        await lock.check()
+        s = await lock.status()
+        XCTAssertEqual(s.state, .locked)
+        XCTAssertEqual(s.presence, .none)
+        XCTAssertEqual(seen.all.last?.state, .locked)
+
+        tokens.driverInstalled = false
+        await lock.check()
+        s = await lock.status()
+        XCTAssertEqual(s.presence, .noDriver)
     }
 
     func testIdleTimeoutLocks() async throws {
