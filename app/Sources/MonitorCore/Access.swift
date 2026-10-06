@@ -34,14 +34,9 @@ public enum UserAction: String, CaseIterable, Sendable {
         }
     }
 
-    /// Changes that need the admin key once one is set up (see AdminLock).
-    /// Looking around and opening SSH stay available while locked.
-    public var needsAdminKey: Bool {
-        switch self {
-        case .view, .ssh, .adminLogin: return false
-        case .installAgent, .editConfig, .manageVPNKeys, .restart, .updateApp, .manageAccess: return true
-        }
-    }
+    /// Needs the admin key once one is set up (see AdminLock): everything,
+    /// even looking, except unlocking itself.
+    public var needsAdminKey: Bool { self != .adminLogin }
 }
 
 public enum Role: String, CaseIterable, Sendable {

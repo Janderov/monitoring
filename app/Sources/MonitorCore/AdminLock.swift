@@ -1,10 +1,11 @@
 import Foundation
 
 /// Owner login with a hardware key. Until a key is set up nothing changes;
-/// once it is, the app starts locked: everything can be viewed, but changes
-/// (adding servers, VPN keys, restarts, updates) need the key inserted and
-/// its PIN entered. `Auditor.perform` asks `AdminLock.authorize` before each
-/// such change.
+/// once it is, the app starts locked and shows nothing until the key is
+/// inserted and its PIN entered. Pulling the key out locks it again at once
+/// (`startWatching` polls the token every second). `Auditor.perform` also
+/// asks `AdminLock.authorize` before every change, so nothing slips through
+/// a screen that forgot to hide.
 
 /// What proves the owner is at the Mac. Rutoken Lite today (`RutokenLiteKey`);
 /// a FIDO2 key (Rutoken MFA) can replace it later behind the same protocol.
@@ -144,8 +145,22 @@ public enum AdminLockState: String, Equatable, Sendable {
     case unlocked
 }
 
+/// Which token is in the reader, for the lock screen.
+public enum KeyPresence: String, Equatable, Sendable {
+    /// The Rutoken driver is not installed.
+    case noDriver
+    /// Nothing inserted: «Вставьте ваш токен».
+    case none
+    /// The token set up as the key: ask for the PIN.
+    case mine
+    /// Some other token: «Это не ваш токен».
+    case other
+}
+
 public struct AdminLockStatus: Equatable, Sendable {
     public var state: AdminLockState
+    /// What is inserted now; refreshed by `startWatching`.
+    public var presence: KeyPresence
     /// Name of the token set up as the key, e.g. "Rutoken Lite".
     public var keyName: String?
     /// Serial number of that token.
@@ -169,24 +184,23 @@ public struct EnrollResult: Equatable, Sendable {
 
 public actor AdminLock {
     public static let factoryPIN = "12345678"
-    /// Locks again after this long without changes.
-    public static let defaultIdle: TimeInterval = 15 * 60
 
     private let key: AdminKey
     private let secrets: SecretStore
     private let store: Store?
     private let now: @Sendable () -> Date
-    private let idle: TimeInterval
+    private let idle: TimeInterval?
     private var record: AdminKeyRecord?
     private var state: AdminLockState
     private var byRecovery = false
     private var defaultPIN = false
     private var lastActivity = Date.distantPast
+    private var presence = KeyPresence.none
     private var onChange: (@Sendable (AdminLockStatus) -> Void)?
     private var watcher: Task<Void, Never>?
 
     public init(key: AdminKey = RutokenLiteKey(), secrets: SecretStore, store: Store? = nil,
-                idle: TimeInterval = AdminLock.defaultIdle, now: @escaping @Sendable () -> Date = Date.init) {
+                idle: TimeInterval? = nil, now: @escaping @Sendable () -> Date = Date.init) {
         self.key = key
         self.secrets = secrets
         self.store = store
@@ -198,7 +212,7 @@ public actor AdminLock {
     }
 
     public func status() -> AdminLockStatus {
-        AdminLockStatus(state: state, keyName: record?.keyName, keyID: record?.keyID,
+        AdminLockStatus(state: state, presence: presence, keyName: record?.keyName, keyID: record?.keyID,
                         unlockedByRecovery: state == .unlocked && byRecovery, defaultPIN: defaultPIN)
     }
 
@@ -259,6 +273,7 @@ public actor AdminLock {
 
     public func lock() {
         guard state == .unlocked else { return }
+        refreshPresence()
         state = .locked
         byRecovery = false
         changed()
@@ -304,16 +319,18 @@ public actor AdminLock {
     }
 
     /// Called before every change. Unlocked by the token means the token must
-    /// still be inserted; any unlock expires after `idle` without changes.
+    /// still be inserted; with `idle` set, an unlock also expires after that
+    /// long without changes.
     public func authorize(_ action: UserAction) throws {
-        guard action.needsAdminKey, let record else { return }
+        guard action.needsAdminKey, record != nil else { return }
         guard state == .unlocked else { throw AdminLockError.locked }
-        if now().timeIntervalSince(lastActivity) > idle {
+        if expired() {
             lock()
             throw AdminLockError.locked
         }
         if !byRecovery {
-            guard (try? key.inserted())?.contains(where: { $0.serial == record.keyID }) == true else {
+            refreshPresence()
+            guard presence == .mine else {
                 lock()
                 throw AdminLockError.locked
             }
@@ -321,15 +338,19 @@ public actor AdminLock {
         lastActivity = now()
     }
 
-    /// Locks when the token is pulled out or the app sat idle too long.
+    /// Notices the token going in or out: locks at once when the key is
+    /// pulled out, and tells the lock screen what is inserted.
     public func check() {
-        guard state == .unlocked, let record else { return }
-        if now().timeIntervalSince(lastActivity) > idle { return lock() }
-        if !byRecovery, (try? key.inserted())?.contains(where: { $0.serial == record.keyID }) != true { lock() }
+        guard record != nil else { return }
+        let before = presence
+        refreshPresence()
+        if state == .unlocked, expired() || (!byRecovery && presence != .mine) { return lock() }
+        if presence != before { changed() }
     }
 
-    /// Runs `check` every few seconds until `stopWatching`.
-    public func startWatching(every seconds: TimeInterval = 3) {
+    /// Runs `check` every second (by default) until `stopWatching`. Asking a
+    /// PKCS#11 library which tokens are present is cheap.
+    public func startWatching(every seconds: TimeInterval = 1) {
         watcher?.cancel()
         watcher = Task { [weak self] in
             while !Task.isCancelled {
@@ -344,7 +365,25 @@ public actor AdminLock {
         watcher = nil
     }
 
+    private func expired() -> Bool {
+        guard let idle else { return false }
+        return now().timeIntervalSince(lastActivity) > idle
+    }
+
+    private func refreshPresence() {
+        guard let record else { presence = .none; return }
+        do {
+            let tokens = try key.inserted()
+            presence = tokens.contains { $0.serial == record.keyID } ? .mine : tokens.isEmpty ? .none : .other
+        } catch TokenError.noDriver {
+            presence = .noDriver
+        } catch {
+            presence = .none
+        }
+    }
+
     private func open(byRecovery: Bool) {
+        refreshPresence()
         state = .unlocked
         self.byRecovery = byRecovery
         lastActivity = now()
