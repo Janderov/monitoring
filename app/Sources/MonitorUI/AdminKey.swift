@@ -50,9 +50,6 @@ struct UnlockPanel: View {
     @State private var useCode = false
     @State private var busy = false
     @State private var error: String?
-    /// Nil until the first check; then whether the key's token is plugged in.
-    @State private var inserted: Bool?
-    @State private var noDriver = false
     /// Unlocked with the factory PIN: offer to change it before showing data.
     @State private var factoryPIN = false
     @FocusState private var pinFocused: Bool
@@ -70,12 +67,19 @@ struct UnlockPanel: View {
                 buttons
             }
         }
-        .task { await watchToken() }
+        // The lock watches the USB slot every second and reports here.
+        .onChange(of: presence, initial: true) { _, p in
+            if p == .mine { pinFocused = true } else { pin = "" }
+        }
     }
+
+    private var presence: KeyPresence { model.admin?.presence ?? .none }
+    private var inserted: Bool { presence == .mine }
+    private var noDriver: Bool { presence == .noDriver }
 
     private var content: some View {
         VStack(spacing: 14) {
-            Image(systemName: useCode ? "key.horizontal.fill" : (inserted == true ? "lock.fill" : "cable.connector"))
+            Image(systemName: useCode ? "key.horizontal.fill" : (inserted ? "lock.fill" : "cable.connector"))
                 .font(.system(size: 40)).foregroundStyle(.tint)
                 .padding(.top, 8)
             Text(title).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
@@ -86,13 +90,11 @@ struct UnlockPanel: View {
                     .font(.body.monospaced())
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(unlock)
-            } else if inserted == true {
+            } else if inserted {
                 SecureField("PIN", text: $pin, prompt: Text("PIN токена"))
                     .textFieldStyle(.roundedBorder)
                     .focused($pinFocused)
                     .onSubmit(unlock)
-            } else if inserted == false, !noDriver {
-                ProgressView().controlSize(.small)
             }
             if let error {
                 Text(error).foregroundStyle(.red).multilineTextAlignment(.center)
@@ -105,8 +107,12 @@ struct UnlockPanel: View {
 
     private var title: String {
         if useCode { return "Вход по коду восстановления" }
-        if noDriver { return "Не установлен драйвер Рутокен" }
-        return inserted == true ? "Введите PIN" : "Вставьте ваш токен"
+        switch presence {
+        case .noDriver: return "Не установлен драйвер Рутокен"
+        case .mine: return "Введите PIN"
+        case .other: return "Это не ваш токен"
+        case .none: return "Вставьте ваш токен"
+        }
     }
 
     private var detail: String {
@@ -117,9 +123,11 @@ struct UnlockPanel: View {
             return "Установите модуль PKCS#11 для macOS с сайта rutoken.ru («Поддержка» → «Центр загрузки») и вставьте токен."
         }
         let key = [model.admin?.keyName, model.admin?.keyID].compactMap { $0 }.joined(separator: " · ")
-        return inserted == true
-            ? "Токен \(key) найден."
-            : "Монитор открывается только с ключом администратора\(key.isEmpty ? "" : " (\(key))")."
+        switch presence {
+        case .mine: return "Токен \(key) найден."
+        case .other: return "Вставлен другой токен. Монитор открывается только с ключом администратора\(key.isEmpty ? "" : " (\(key))")."
+        default: return "Монитор открывается только с ключом администратора\(key.isEmpty ? "" : " (\(key))")."
+        }
     }
 
     private var buttons: some View {
@@ -141,30 +149,7 @@ struct UnlockPanel: View {
     private var canSubmit: Bool {
         if busy { return false }
         if useCode { return !code.trimmingCharacters(in: .whitespaces).isEmpty }
-        return inserted == true && !pin.isEmpty
-    }
-
-    /// Checks every second whether the key's token is plugged in.
-    private func watchToken() async {
-        guard let lock = model.backend.adminLock else { return }
-        while !Task.isCancelled {
-            let keyID = model.admin?.keyID
-            do {
-                let tokens = try await lock.insertedTokens()
-                let now = tokens.contains { keyID == nil || $0.serial == keyID }
-                if now != inserted {
-                    inserted = now
-                    if now { pinFocused = true } else { pin = "" }
-                }
-                noDriver = false
-            } catch TokenError.noDriver {
-                noDriver = true
-                inserted = false
-            } catch {
-                inserted = false
-            }
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-        }
+        return inserted && !pin.isEmpty
     }
 
     private func unlock() {
