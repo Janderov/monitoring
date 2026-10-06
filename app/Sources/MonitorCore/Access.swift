@@ -15,8 +15,10 @@ public enum UserAction: String, CaseIterable, Sendable {
     /// Restart a container or reboot a server.
     case restart
     case updateApp
-    /// Give or take away other people's access.
+    /// Give or take away other people's access, set up the admin key.
     case manageAccess
+    /// Unlocking the app with the admin key or recovery code.
+    case adminLogin
 
     public var title: String {
         switch self {
@@ -28,8 +30,13 @@ public enum UserAction: String, CaseIterable, Sendable {
         case .restart: return "Перезапуск"
         case .updateApp: return "Обновление приложения"
         case .manageAccess: return "Управление доступом"
+        case .adminLogin: return "Вход администратора"
         }
     }
+
+    /// Needs the admin key once one is set up (see AdminLock): everything,
+    /// even looking, except unlocking itself.
+    public var needsAdminKey: Bool { self != .adminLogin }
 }
 
 public enum Role: String, CaseIterable, Sendable {
@@ -140,10 +147,12 @@ public struct AuditRecord: Equatable, Identifiable, Sendable {
 /// outcome whether it succeeded, failed or was refused.
 public actor Auditor {
     private let store: Store
+    private let lock: AdminLock?
     private let now: @Sendable () -> Date
 
-    public init(store: Store, now: @escaping @Sendable () -> Date = Date.init) {
+    public init(store: Store, lock: AdminLock? = nil, now: @escaping @Sendable () -> Date = Date.init) {
         self.store = store
+        self.lock = lock
         self.now = now
     }
 
@@ -159,6 +168,14 @@ public actor Auditor {
         guard Access.can(actor, action, object) else {
             await log(.denied)
             throw AccessDenied(action: action)
+        }
+        if let lock {
+            do {
+                try await lock.authorize(action)
+            } catch {
+                await log(.denied, "\(error)")
+                throw error
+            }
         }
         do {
             let value = try await body()

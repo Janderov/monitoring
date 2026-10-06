@@ -13,6 +13,14 @@ public struct SettingsView: View {
     public init(model: AppModel) { self.model = model }
 
     public var body: some View {
+        if model.showsLockScreen {
+            LockScreen(model: model).frame(width: 520, height: 420)
+        } else {
+            tabs
+        }
+    }
+
+    private var tabs: some View {
         TabView {
             GeneralSettings(model: model)
                 .tabItem { Label("Основные", systemImage: "gearshape") }
@@ -20,6 +28,8 @@ public struct SettingsView: View {
                 .tabItem { Label("Обновления", systemImage: "arrow.down.circle") }
             AccessSettings(model: model)
                 .tabItem { Label("Доступ", systemImage: "person.2") }
+            AdminKeySettings(model: model)
+                .tabItem { Label("Ключ администратора", systemImage: "key") }
         }
         .frame(width: 520)
     }

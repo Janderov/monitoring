@@ -62,6 +62,10 @@ public protocol MonitorBackend: AnyObject, Sendable {
     func audited<T: Sendable>(_ action: UserAction, on object: ObjectRef, detail: String,
                               _ body: @Sendable () async throws -> T) async throws -> T
     func auditLog(limit: Int, objectID: String?) async throws -> [AuditRecord]
+
+    /// Owner login with a hardware key (Rutoken); nil before `start` or when
+    /// this backend has none.
+    var adminLock: AdminLock? { get }
 }
 
 public struct BackendError: LocalizedError {
@@ -76,6 +80,7 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
     private var store: Store?
     private var poller: Poller?
     private var auditor: Auditor?
+    public private(set) var adminLock: AdminLock?
     private let secrets: SecretStore
     private let config: ConfigRepository
 
@@ -93,7 +98,11 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
                             onUpdate: onUpdate, onEvents: notify)
         self.store = store
         self.poller = poller
-        self.auditor = Auditor(store: store)
+        let lock = AdminLock(secrets: secrets, store: store)
+        self.adminLock = lock
+        self.auditor = Auditor(store: store, lock: lock)
+        // Locks again when the token is pulled out or after 15 idle minutes.
+        await lock.startWatching()
         await poller.setSitesHandler(onSites)
         let saved = UserDefaults.standard.double(forKey: Poller.refreshDefaultsKey)
         if saved > 0 { await poller.setRefreshInterval(saved) }
@@ -195,6 +204,10 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
                                      _ body: @Sendable () async throws -> T) async throws -> T {
         guard let auditor else {
             guard Access.can(.owner, action, object) else { throw BackendError("нет прав: \(action.title.lowercased())") }
+            // Before start the admin key cannot be checked; never skip it.
+            if action.needsAdminKey, (try? secrets.get(SecretKey.adminKey)) != nil {
+                throw BackendError("приложение ещё запускается, повторите через несколько секунд")
+            }
             return try await body()
         }
         return try await auditor.perform(action, on: object, detail: detail, body)

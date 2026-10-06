@@ -21,6 +21,11 @@ public final class AppModel: ObservableObject {
     @Published public var filter: Filter?
     /// The add or edit form shown over the main window.
     @Published public var sheet: EditSheet?
+    /// Admin key (Rutoken) state; nil until the backend has started.
+    @Published public private(set) var admin: AdminLockStatus?
+    /// Keeps the lock screen up after unlocking, while it asks to change the
+    /// factory PIN.
+    @Published public var holdLockScreen = false
 
     public let backend: MonitorBackend
     public let locations: ServerLocations
@@ -42,10 +47,22 @@ public final class AppModel: ObservableObject {
     }
 
     public convenience init(notify: @escaping @Sendable ([AlertEvent]) -> Void) {
-        self.init(backend: LocalBackend(notify: notify))
+        let gate = LockGate()
+        // Until the lock reports in, a key set up earlier means locked.
+        gate.set(AppModel.keySetUp())
+        self.init(backend: LocalBackend(notify: { events in
+            // Locked: say that something happened, never which server or what.
+            notify(gate.isLocked ? events.map(LockGate.redact) : events)
+        }), gate: gate)
     }
 
-    public init(backend: MonitorBackend) {
+    public convenience init(backend: MonitorBackend) {
+        self.init(backend: backend, gate: LockGate())
+    }
+
+    init(backend: MonitorBackend, gate: LockGate) {
+        self.lockGate = gate
+        self.keyAtLaunch = AppModel.keySetUp()
         self.backend = backend
         self.locations = ServerLocations()
         self.updates = UpdateModel(secrets: KeychainSecrets(), backend: backend)
@@ -66,6 +83,16 @@ public final class AppModel: ObservableObject {
         } catch {
             configError = "Не удалось открыть данные: \(describe(error))"
             return
+        }
+        if let lock = backend.adminLock {
+            admin = await lock.status()
+            noteLock(admin)
+            await lock.setOnChange { [unowned self] status in
+                Task { @MainActor in
+                    self.admin = status
+                    self.noteLock(status)
+                }
+            }
         }
         await reload()
     }
@@ -89,7 +116,35 @@ public final class AppModel: ObservableObject {
     /// Single permission check for every button. The rules live in the
     /// core's Access; today the only user is the owner.
     public func can(_ action: UserAction, _ server: ServerConfig? = nil) -> Bool {
-        Access.can(.owner, action, server.map(ObjectRef.server))
+        // Locked by the admin key: nothing is shown, so nothing can be done.
+        if showsLockScreen { return false }
+        return Access.can(.owner, action, server.map(ObjectRef.server))
+    }
+
+    /// An admin key is set up and not unlocked right now.
+    public var isLocked: Bool { admin?.state == .locked }
+
+    /// Nothing but «Вставьте ваш токен» is shown: no servers, no data.
+    /// Before the backend has started, a key set up earlier counts as locked,
+    /// so data never flashes on screen at launch.
+    public var showsLockScreen: Bool { isLocked || holdLockScreen || (admin == nil && keyAtLaunch) }
+
+    private let keyAtLaunch: Bool
+
+    static func keySetUp() -> Bool { (try? KeychainSecrets().get(SecretKey.adminKey)) != nil }
+
+    /// Read by the notification path, which runs off the main thread.
+    let lockGate: LockGate
+
+    private func noteLock(_ status: AdminLockStatus?) {
+        let locked = status?.state == .locked
+        lockGate.set(locked)
+        // Forms show server details; close them when the token goes.
+        if locked { sheet = nil }
+    }
+
+    public func lockNow() {
+        Task { await backend.adminLock?.lock() }
     }
 
     public func status(_ id: String) -> ServerStatus? { statuses.first { $0.id == id } }
@@ -113,6 +168,7 @@ public final class AppModel: ObservableObject {
     }
 
     public func copyAddress(_ server: ServerConfig) {
+        guard !showsLockScreen else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(server.host, forType: .string)
     }
@@ -122,7 +178,10 @@ public final class AppModel: ObservableObject {
     public var siteConfigs: [SiteConfig] { siteStatuses.map(\.site) }
 
     /// Opens the add/edit form in the main window (also from the menu bar).
-    public func present(_ sheet: EditSheet) { self.sheet = sheet }
+    public func present(_ sheet: EditSheet) {
+        guard !showsLockScreen else { return }
+        self.sheet = sheet
+    }
 
     /// A short readable id for a new server, from its name or address.
     public func newServerID(from text: String) -> String {
@@ -209,5 +268,22 @@ public struct Problem: Identifiable, Sendable {
     public var status: ServerStatus
     public var alert: ActiveAlert
     public var id: String { "\(status.id)|\(alert.key)" }
+}
+/// Whether the app is locked, for code that runs off the main thread.
+final class LockGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var locked = false
+
+    var isLocked: Bool { lock.withLock { locked } }
+    func set(_ value: Bool) { lock.withLock { locked = value } }
+
+    static func redact(_ e: AlertEvent) -> AlertEvent {
+        var r = e
+        r.serverID = "locked"
+        r.serverName = "Монитор"
+        r.key = "locked"
+        r.message = "есть изменения, вставьте токен, чтобы посмотреть"
+        return r
+    }
 }
 #endif

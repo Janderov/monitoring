@@ -6,7 +6,7 @@ import SwiftUI
 /// The menu bar icon: a server symbol in the menu bar's own color, plus a
 /// colored dot only when something needs attention.
 public enum MenuBarIcon {
-    public static func image(for level: ServerStatus.Level) -> NSImage {
+    public static func image(for level: ServerStatus.Level, locked: Bool = false) -> NSImage {
         let size = NSSize(width: 20, height: 16)
         let img = NSImage(size: size, flipped: false) { rect in
             let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
@@ -22,6 +22,25 @@ public enum MenuBarIcon {
                 return true
             }
             tinted.draw(in: r)
+            if locked {
+                // A small padlock in the lower right: changes need the admin key.
+                let lockConfig = NSImage.SymbolConfiguration(pointSize: 8, weight: .bold)
+                if let padlock = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: nil)?
+                    .withSymbolConfiguration(lockConfig) {
+                    let ps = padlock.size
+                    let pr = NSRect(x: rect.width - ps.width, y: 0, width: ps.width, height: ps.height)
+                    NSGraphicsContext.current?.compositingOperation = .clear
+                    NSBezierPath(rect: pr.insetBy(dx: -1, dy: -1)).fill()
+                    NSGraphicsContext.current?.compositingOperation = .sourceOver
+                    let tintedLock = NSImage(size: ps, flipped: false) { tr in
+                        padlock.draw(in: tr)
+                        NSColor.labelColor.set()
+                        tr.fill(using: .sourceAtop)
+                        return true
+                    }
+                    tintedLock.draw(in: pr)
+                }
+            }
             if level == .warning || level == .critical {
                 let d: CGFloat = 7
                 let dot = NSRect(x: rect.width - d - 0.5, y: rect.height - d - 0.5, width: d, height: d)
@@ -34,7 +53,7 @@ public enum MenuBarIcon {
             return true
         }
         img.isTemplate = false
-        img.accessibilityDescription = "Мониторинг: \(level.label)"
+        img.accessibilityDescription = "Мониторинг: \(level.label)" + (locked ? ", заблокировано" : "")
         return img
     }
 }
@@ -47,6 +66,32 @@ public struct MenuBarContent: View {
     public init(model: AppModel) { self.model = model }
 
     public var body: some View {
+        if model.showsLockScreen { locked } else { unlocked }
+    }
+
+    /// Locked: no servers, no problems, only the way in.
+    private var locked: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "lock.fill").font(.title2).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Монитор заблокирован").font(.headline)
+                    Text("Вставьте ваш токен и введите PIN в окне приложения")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(14)
+            Divider().padding(.horizontal, 12)
+            VStack(spacing: 0) {
+                MenuButton(title: "Открыть окно", shortcut: "⌘0") { openMain() }
+                MenuButton(title: "Выйти", shortcut: "⌘Q") { NSApp.terminate(nil) }
+            }
+            .padding(.vertical, 4)
+        }
+        .frame(width: 340)
+    }
+
+    private var unlocked: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().padding(.horizontal, 12)
@@ -159,6 +204,9 @@ public struct MenuBarContent: View {
     private var footer: some View {
         VStack(spacing: 0) {
             UpdateMenuRow(updates: model.updates)
+            if model.admin?.state == .unlocked {
+                MenuButton(title: "Заблокировать", shortcut: "⌃⌘L") { model.lockNow() }
+            }
             MenuButton(title: "Открыть окно", shortcut: "⌘0") { openMain() }
             MenuButton(title: "Настройки…", shortcut: "⌘,") {
                 NSApp.activate(ignoringOtherApps: true)
