@@ -31,14 +31,117 @@ public final class MemorySecrets: SecretStore, @unchecked Sendable {
     public func remove(_ account: String) throws { lock.withLock { _ = values.removeValue(forKey: account) } }
 }
 
+/// Raw items of one secret store: in Keychain, one generic password per
+/// account under the app's service.
+public protocol SecretItems: Sendable {
+    func read(_ account: String) throws -> Data?
+    func write(_ data: Data, for account: String) throws
+    func delete(_ account: String) throws
+    /// Account names only; listing reads no secrets, so it never prompts.
+    func accounts() throws -> [String]
+}
+
+/// All secrets in one item, "vault", as a JSON dictionary.
+///
+/// The app is signed ad hoc, so every new build is a stranger to Keychain
+/// and macOS asks for the login password once per item it reads. With one
+/// item per server token, SSH and site password that was a dozen prompts
+/// after each update; with the vault it is one. The vault is read once and
+/// kept in memory, so a plain "Allow" also covers the whole run.
+///
+/// Items saved by older versions (one per account) are moved into the vault
+/// the first time it is missing, then deleted.
+public final class VaultSecrets: SecretStore, @unchecked Sendable {
+    public static let vaultAccount = "vault"
+
+    private let items: SecretItems
+    private let lock = NSLock()
+    private var cache: [String: String]?
+
+    public init(items: SecretItems) { self.items = items }
+
+    public func get(_ account: String) throws -> String? {
+        try lock.withLock { try loaded()[account] }
+    }
+
+    public func set(_ value: String, for account: String) throws {
+        try lock.withLock {
+            var all = try loaded()
+            guard all[account] != value else { return }
+            all[account] = value
+            try save(all)
+        }
+    }
+
+    public func remove(_ account: String) throws {
+        try lock.withLock {
+            var all = try loaded()
+            guard all.removeValue(forKey: account) != nil else { return }
+            try save(all)
+        }
+    }
+
+    private func loaded() throws -> [String: String] {
+        if let cache { return cache }
+        if let data = try items.read(Self.vaultAccount) {
+            let all = try JSONDecoder().decode([String: String].self, from: data)
+            cache = all
+            return all
+        }
+        // First run of a version with the vault: gather the old items. If
+        // one cannot be read (the prompt was denied), nothing is written or
+        // deleted, and the move is tried again next time.
+        let legacy = try items.accounts().filter { $0 != Self.vaultAccount }
+        var all: [String: String] = [:]
+        for account in legacy {
+            if let data = try items.read(account) { all[account] = String(decoding: data, as: UTF8.self) }
+        }
+        try save(all)
+        for account in legacy { try? items.delete(account) }
+        return all
+    }
+
+    private func save(_ all: [String: String]) throws {
+        let enc = JSONEncoder()
+        enc.outputFormatting = .sortedKeys
+        try items.write(try enc.encode(all), for: Self.vaultAccount)
+        cache = all
+    }
+}
+
 #if canImport(Security)
-/// Generic passwords in the login keychain under service com.janderov.monitor.
-/// The app is signed ad hoc, so after installing a new build macOS asks once
-/// whether it may read them; "Always Allow" keeps it quiet until the next build.
+/// Secrets in the login keychain under service com.janderov.monitor, all in
+/// one vault item (see VaultSecrets). Every instance for a service shares one
+/// vault, so the item is read once per run.
 public struct KeychainSecrets: SecretStore {
     public let service: String
+    private let vault: VaultSecrets
 
-    public init(service: String = "com.janderov.monitor") { self.service = service }
+    private final class Vaults: @unchecked Sendable {
+        let lock = NSLock()
+        var byService: [String: VaultSecrets] = [:]
+    }
+    private static let vaults = Vaults()
+
+    public init(service: String = "com.janderov.monitor") {
+        self.service = service
+        let vaults = Self.vaults
+        vault = vaults.lock.withLock {
+            if let v = vaults.byService[service] { return v }
+            let v = VaultSecrets(items: KeychainItems(service: service))
+            vaults.byService[service] = v
+            return v
+        }
+    }
+
+    public func get(_ account: String) throws -> String? { try vault.get(account) }
+    public func set(_ value: String, for account: String) throws { try vault.set(value, for: account) }
+    public func remove(_ account: String) throws { try vault.remove(account) }
+}
+
+/// Generic passwords in the login keychain, one per account.
+struct KeychainItems: SecretItems {
+    let service: String
 
     private func query(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
@@ -46,7 +149,7 @@ public struct KeychainSecrets: SecretStore {
          kSecAttrAccount as String: account]
     }
 
-    public func get(_ account: String) throws -> String? {
+    func read(_ account: String) throws -> Data? {
         var q = query(account)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -54,16 +157,16 @@ public struct KeychainSecrets: SecretStore {
         let status = SecItemCopyMatching(q as CFDictionary, &out)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = out as? Data else { throw KeychainError(status) }
-        return String(decoding: data, as: UTF8.self)
+        return data
     }
 
-    public func set(_ value: String, for account: String) throws {
-        let data = Data(value.utf8)
+    func write(_ data: Data, for account: String) throws {
         let status = SecItemUpdate(query(account) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
             var q = query(account)
             q[kSecValueData as String] = data
-            q[kSecAttrLabel as String] = "Мониторинг: \(account)"
+            q[kSecAttrLabel as String] = account == VaultSecrets.vaultAccount
+                ? "Мониторинг: пароли и токены" : "Мониторинг: \(account)"
             let added = SecItemAdd(q as CFDictionary, nil)
             guard added == errSecSuccess else { throw KeychainError(added) }
         } else if status != errSecSuccess {
@@ -71,9 +174,21 @@ public struct KeychainSecrets: SecretStore {
         }
     }
 
-    public func remove(_ account: String) throws {
+    func delete(_ account: String) throws {
         let status = SecItemDelete(query(account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status) }
+    }
+
+    func accounts() throws -> [String] {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                kSecAttrService as String: service,
+                                kSecReturnAttributes as String: true,
+                                kSecMatchLimit as String: kSecMatchLimitAll]
+        var out: CFTypeRef?
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess, let rows = out as? [[String: Any]] else { throw KeychainError(status) }
+        return rows.compactMap { $0[kSecAttrAccount as String] as? String }
     }
 }
 

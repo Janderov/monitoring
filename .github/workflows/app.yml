@@ -50,6 +50,31 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then v="$GITHUB_REF_NAME"; else v="dev-${HEAD_SHA::7}"; fi
           scripts/dist.sh "$v"
+      # With a stable Team ID in the signature, Keychain keeps trusting the
+      # app across updates (docs/signing.md). Without the secrets (not set
+      # up yet, or a fork's PR) the app is signed ad hoc as before.
+      - name: import signing certificate
+        env:
+          CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          if [[ -z "$CERT_P12" ]]; then echo "MAC_CERT_P12 is not set: signing ad hoc"; exit 0; fi
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kcpw="$(uuidgen)"
+          security create-keychain -p "$kcpw" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$kcpw" "$kc"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # The intermediate that issues Apple Development certificates.
+          curl -fsSL -o "$RUNNER_TEMP/wwdr.cer" https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+          security import "$RUNNER_TEMP/wwdr.cer" -k "$kc" || true
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpw" "$kc" > /dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          id="$(security find-identity -v -p codesigning "$kc" | awk '/\)/ {print $2; exit}')"
+          if [[ -z "$id" ]]; then security find-identity -p codesigning "$kc"; echo "no valid identity in MAC_CERT_P12" >&2; exit 1; fi
+          echo "SIGN_IDENTITY=$id" >> "$GITHUB_ENV"
       - name: build Monitor.app
         env:
           REQUIRE_AGENT: "1"
