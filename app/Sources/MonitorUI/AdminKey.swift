@@ -52,15 +52,13 @@ struct UnlockPanel: View {
     @State private var error: String?
     /// Unlocked with the factory PIN: offer to change it before showing data.
     @State private var factoryPIN = false
-    /// This unlock started encrypting the passwords and replaced the code.
-    @State private var newCode: String?
     @FocusState private var pinFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            if let code = newCode {
+            if let code = model.pendingRecoveryCode {
                 RecoveryCodeView(code: code, note: "Теперь пароли SSH, сайтов и токен GitHub зашифрованы ключом с вашего Рутокена. Старый код восстановления больше не действует, вот новый.") {
-                    newCode = nil
+                    model.pendingRecoveryCode = nil
                     if !factoryPIN { finish() }
                 }
             } else if factoryPIN {
@@ -77,6 +75,13 @@ struct UnlockPanel: View {
         // The lock watches the USB slot every second and reports here.
         .onChange(of: presence, initial: true) { _, p in
             if p == .mine { pinFocused = true } else { pin = "" }
+        }
+        // Held open by an unlock whose follow-up (factory PIN) this view no
+        // longer knows about: let the data show rather than ask again.
+        .onAppear {
+            if model.admin?.state == .unlocked, model.pendingRecoveryCode == nil, !factoryPIN {
+                model.holdLockScreen = false
+            }
         }
     }
 
@@ -163,23 +168,35 @@ struct UnlockPanel: View {
         guard canSubmit, let lock = model.backend.adminLock else { return }
         busy = true
         error = nil
+        // Keep this screen (and its state) up until the unlock has been
+        // handled: the lock reports "unlocked" before `unlock` returns, and
+        // dropping the screen then lost the new recovery code and the
+        // factory-PIN step, leaving the PIN prompt stuck.
+        model.holdLockScreen = true
         Task {
             do {
                 if useCode {
                     try await lock.unlock(recoveryCode: code)
                     code = ""
                     busy = false
+                    model.holdLockScreen = false
                 } else {
                     let r = try await lock.unlock(pin: pin)
                     busy = false
                     // Show the new recovery code and ask to change the
                     // factory PIN before the data shows up.
-                    if let code = r.newRecoveryCode { newCode = code; model.holdLockScreen = true }
-                    if r.defaultPIN { factoryPIN = true; model.holdLockScreen = true } else if newCode == nil { pin = "" }
+                    model.pendingRecoveryCode = r.newRecoveryCode
+                    if r.defaultPIN {
+                        factoryPIN = true
+                    } else {
+                        pin = ""
+                        model.holdLockScreen = false
+                    }
                 }
             } catch {
                 self.error = String(describing: error)
                 busy = false
+                model.holdLockScreen = false
             }
         }
     }

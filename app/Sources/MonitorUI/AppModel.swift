@@ -26,6 +26,9 @@ public final class AppModel: ObservableObject {
     /// Keeps the lock screen up after unlocking, while it asks to change the
     /// factory PIN.
     @Published public var holdLockScreen = false
+    /// A recovery code made by the last unlock, shown once on the lock
+    /// screen. Kept here rather than in the view so a redraw cannot lose it.
+    @Published public var pendingRecoveryCode: String?
 
     public let backend: MonitorBackend
     public let locations: ServerLocations
@@ -131,7 +134,9 @@ public final class AppModel: ObservableObject {
     /// Nothing but «Вставьте ваш токен» is shown: no servers, no data.
     /// Before the backend has started, a key set up earlier counts as locked,
     /// so data never flashes on screen at launch.
-    public var showsLockScreen: Bool { isLocked || holdLockScreen || (admin == nil && keyAtLaunch) }
+    public var showsLockScreen: Bool {
+        isLocked || holdLockScreen || pendingRecoveryCode != nil || (admin == nil && keyAtLaunch)
+    }
 
     private let keyAtLaunch: Bool
 
