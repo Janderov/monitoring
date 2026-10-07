@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds Monitor.app (menu bar app) from this Swift package. Run on a Mac:
 #   app/scripts/build-app.sh [version]
-# The result is app/dist/Monitor.app, signed ad hoc (no Apple Developer account).
+# The result is app/dist/Monitor.app, signed with $SIGN_IDENTITY when set (a
+# free Apple Development certificate, see docs/signing.md), else ad hoc.
 # Run agent/scripts/dist.sh first so the app carries the agent it installs.
 set -euo pipefail
 
@@ -57,6 +58,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 PLIST
 
 plutil -lint "$app/Contents/Info.plist"
-codesign --force --sign - --timestamp=none "$app"
+codesign --force --sign "${SIGN_IDENTITY:--}" --timestamp=none "$app"
 codesign --verify "$app"
+codesign -dv "$app" 2>&1 | grep -E "^(Authority|TeamIdentifier)=" || true
 echo "built $app ($version)"
