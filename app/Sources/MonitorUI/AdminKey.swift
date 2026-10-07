@@ -275,6 +275,7 @@ struct AdminKeySettings: View {
     @State private var changingPIN = false
     @State private var replacing = false
     @State private var confirmDisable = false
+    @State private var keyName = ""
 
     private var state: AdminLockState { model.admin?.state ?? .off }
 
@@ -365,7 +366,15 @@ struct AdminKeySettings: View {
 
     @ViewBuilder private var unlockedSection: some View {
         Section("Состояние") {
-            LabeledContent("Ключ", value: keyLine)
+            HStack {
+                TextField("Название", text: $keyName, prompt: Text("например, Rutoken lite Mihail"))
+                    .onSubmit(saveName)
+                if keyName != (model.admin?.keyName ?? "") {
+                    Button("Сохранить", action: saveName).disabled(busy || keyName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .onAppear { keyName = model.admin?.keyName ?? "" }
+            LabeledContent("Номер токена", value: model.admin?.keyID ?? "")
             HStack {
                 Label(model.admin?.unlockedByRecovery == true ? "Открыто кодом восстановления" : "Разблокировано",
                       systemImage: "lock.open")
@@ -403,6 +412,11 @@ struct AdminKeySettings: View {
 
     private var keyLine: String {
         [model.admin?.keyName, model.admin?.keyID].compactMap { $0 }.joined(separator: " · ")
+    }
+
+    private func saveName() {
+        let name = keyName
+        run { try await $0.rename(name) }
     }
 
     private func findTokens() async {

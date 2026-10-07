@@ -308,6 +308,19 @@ public actor AdminLock {
         return code
     }
 
+    /// Renames the key as it shows in the app (the token itself is not touched).
+    public func rename(_ name: String) async throws {
+        guard var rec = record else { throw AdminLockError.notSetUp }
+        guard state == .unlocked else { throw AdminLockError.locked }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != rec.keyName else { return }
+        rec.keyName = name
+        try secrets.set(try Self.encode(rec), for: SecretKey.adminKey)
+        record = rec
+        changed()
+        await log(.manageAccess, "ключ \(rec.keyID) назван «\(name)»", nil)
+    }
+
     /// Turns key login off; the app then works without it, as before setup.
     public func disable() async throws {
         guard record != nil else { return }
