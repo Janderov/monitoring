@@ -52,11 +52,18 @@ struct UnlockPanel: View {
     @State private var error: String?
     /// Unlocked with the factory PIN: offer to change it before showing data.
     @State private var factoryPIN = false
+    /// This unlock started encrypting the passwords and replaced the code.
+    @State private var newCode: String?
     @FocusState private var pinFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            if factoryPIN {
+            if let code = newCode {
+                RecoveryCodeView(code: code, note: "Теперь пароли SSH, сайтов и токен GitHub зашифрованы ключом с вашего Рутокена. Старый код восстановления больше не действует, вот новый.") {
+                    newCode = nil
+                    if !factoryPIN { finish() }
+                }
+            } else if factoryPIN {
                 ChangePINForm(model: model, knownOld: pin,
                               intro: "На токене всё ещё заводской PIN 12345678. Смените его, чтобы с вашим токеном не мог войти другой человек.") {
                     finish()
@@ -165,8 +172,10 @@ struct UnlockPanel: View {
                 } else {
                     let r = try await lock.unlock(pin: pin)
                     busy = false
-                    // Ask to change the factory PIN before the data shows up.
-                    if r.defaultPIN { factoryPIN = true; model.holdLockScreen = true } else { pin = "" }
+                    // Show the new recovery code and ask to change the
+                    // factory PIN before the data shows up.
+                    if let code = r.newRecoveryCode { newCode = code; model.holdLockScreen = true }
+                    if r.defaultPIN { factoryPIN = true; model.holdLockScreen = true } else if newCode == nil { pin = "" }
                 }
             } catch {
                 self.error = String(describing: error)
@@ -458,6 +467,7 @@ struct AdminKeySettings: View {
 /// The recovery code, once, with «Я записал».
 private struct RecoveryCodeView: View {
     var code: String
+    var note: String? = nil
     var onDone: () -> Void
     @State private var copied = false
 
@@ -465,6 +475,9 @@ private struct RecoveryCodeView: View {
         VStack(spacing: 14) {
             Image(systemName: "key.horizontal.fill").font(.largeTitle).foregroundStyle(.tint)
             Text("Код восстановления").font(.title3.weight(.semibold))
+            if let note {
+                Text(note).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            }
             Text(code)
                 .font(.title2.monospaced())
                 .textSelection(.enabled)

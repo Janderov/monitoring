@@ -14,11 +14,12 @@ public protocol AdminKey: Sendable {
     var kind: String { get }
     func inserted() throws -> [TokenInfo]
     /// Puts a fresh secret on the only inserted token and returns what the
-    /// app keeps to recognise it later. Nothing secret is returned.
+    /// app keeps to recognise it later, plus the secret itself, which only
+    /// ever lives in memory (it opens the sealed passwords).
     func enroll(pin: String) throws -> EnrolledKey
     /// Throws unless the token with this id is inserted, the PIN opens it and
-    /// it holds the secret matching `proof`.
-    func verify(pin: String, keyID: String, proof: String) throws -> TokenInfo
+    /// it holds the secret matching `proof`; returns that secret.
+    func verify(pin: String, keyID: String, proof: String) throws -> VerifiedKey
     func changePIN(keyID: String, old: String, new: String) throws
 }
 
@@ -28,6 +29,14 @@ public struct EnrolledKey: Equatable, Sendable {
     /// SHA-256 of the secret on the token, hex.
     public var proof: String
     public var token: TokenInfo
+    /// The secret on the token. Never stored by the app.
+    public var secret: [UInt8]
+}
+
+public struct VerifiedKey: Equatable, Sendable {
+    public var token: TokenInfo
+    /// The secret on the token. Never stored by the app.
+    public var secret: [UInt8]
 }
 
 public enum AdminLockError: Error, Equatable, CustomStringConvertible, Sendable {
@@ -76,15 +85,15 @@ public struct RutokenLiteKey: AdminKey {
         }
         let name = token.displayName
         return EnrolledKey(keyID: token.serial, keyName: name.isEmpty ? "Рутокен" : name,
-                           proof: Digest.sha256Hex(secret), token: token)
+                           proof: Digest.sha256Hex(secret), token: token, secret: secret)
     }
 
-    public func verify(pin: String, keyID: String, proof: String) throws -> TokenInfo {
+    public func verify(pin: String, keyID: String, proof: String) throws -> VerifiedKey {
         let token = try find(keyID)
         let secret = try driver.withSession(slot: token.slot, pin: pin) { try $0.readData(label: Self.label) }
         guard let secret else { throw AdminLockError.noKeyData }
         guard Digest.equal(Array(Digest.sha256Hex(secret).utf8), Array(proof.utf8)) else { throw AdminLockError.wrongKey }
-        return token
+        return VerifiedKey(token: token, secret: secret)
     }
 
     public func changePIN(keyID: String, old: String, new: String) throws {
@@ -100,7 +109,8 @@ public struct RutokenLiteKey: AdminKey {
 }
 
 /// What the app remembers about the key, in Keychain. No secrets: the token
-/// secret and the recovery code are stored only as hashes.
+/// secret and the recovery code are stored only as hashes, and the key of
+/// the sealed passwords only wrapped by each of them.
 public struct AdminKeyRecord: Codable, Equatable, Sendable {
     public var kind: String
     public var keyID: String
@@ -109,6 +119,11 @@ public struct AdminKeyRecord: Codable, Equatable, Sendable {
     public var recoverySalt: String
     public var recoveryHash: String
     public var enrolledAt: Date
+    /// The sealed-passwords key wrapped with the token secret; nil in records
+    /// from before sealing, until the next unlock with the token.
+    public var sealKeyByToken: String?
+    /// The same key wrapped with the recovery code.
+    public var sealKeyByRecovery: String?
 }
 
 /// A one-time-shown code that unlocks the app when the token is lost.
@@ -174,6 +189,9 @@ public struct AdminLockStatus: Equatable, Sendable {
 /// Unlock result for the screen: whether to nag about the factory PIN.
 public struct UnlockResult: Equatable, Sendable {
     public var defaultPIN: Bool
+    /// Set when this unlock started sealing the passwords: the old recovery
+    /// code cannot open them, so this one replaces it. Show it once.
+    public var newRecoveryCode: String? = nil
 }
 
 public struct EnrollResult: Equatable, Sendable {
@@ -201,6 +219,9 @@ public actor AdminLock {
     private var presence = KeyPresence.none
     private var onChange: (@Sendable (AdminLockStatus) -> Void)?
     private var watcher: Task<Void, Never>?
+    /// Key of the sealed passwords while unlocked; nil otherwise.
+    private var dataKey: [UInt8]?
+    private var onSecretsOpened: (@Sendable () -> Void)?
 
     public init(key: AdminKey = RutokenLiteKey(), secrets: SecretStore, store: Store? = nil,
                 idle: TimeInterval? = nil, now: @escaping @Sendable () -> Date = Date.init) {
@@ -221,6 +242,13 @@ public actor AdminLock {
 
     public func setOnChange(_ handler: (@Sendable (AdminLockStatus) -> Void)?) { onChange = handler }
 
+    /// Called after an unlock made the sealed passwords readable, so the
+    /// app can reload what needs them (site logins for the agents).
+    public func setOnSecretsOpened(_ handler: (@Sendable () -> Void)?) { onSecretsOpened = handler }
+
+    /// Where the sealed passwords live; nil for stores without sealing (tests).
+    private var sealing: SealedSecrets? { (secrets as? SealingStore)?.sealing }
+
     /// Tokens inserted now, for the setup screen. Throws TokenError.noDriver
     /// when the Rutoken driver is not installed.
     public func insertedTokens() throws -> [TokenInfo] { try key.inserted() }
@@ -230,14 +258,28 @@ public actor AdminLock {
     public func enroll(pin: String) async throws -> EnrollResult {
         guard state != .locked else { throw AdminLockError.locked }
         do {
+            // Replacing a lost token keeps the key of the sealed passwords,
+            // which is open now; a first setup makes one. Checked before the
+            // token is written, so a refusal never strands the old record.
+            if let sealing, sealing.isSealed, dataKey == nil {
+                // No key set up but a box left over (its record was deleted):
+                // nothing can open it any more, so start clean.
+                guard record == nil else { throw AdminLockError.locked }
+                try sealing.discard()
+            }
             let enrolled = try key.enroll(pin: pin)
+            let dk = dataKey ?? KeyWrap.newDataKey()
             let code = RecoveryCode.make()
             let salt = Digest.randomBytes(16).map { String(format: "%02x", $0) }.joined()
             let rec = AdminKeyRecord(kind: key.kind, keyID: enrolled.keyID, keyName: enrolled.keyName,
                                      proof: enrolled.proof, recoverySalt: salt,
-                                     recoveryHash: RecoveryCode.hash(code, salt: salt), enrolledAt: now())
+                                     recoveryHash: RecoveryCode.hash(code, salt: salt), enrolledAt: now(),
+                                     sealKeyByToken: try KeyWrap.wrap(dk, with: enrolled.secret, context: Self.tokenContext),
+                                     sealKeyByRecovery: try Self.wrap(dk, recoveryCode: code, salt: salt))
             try secrets.set(try Self.encode(rec), for: SecretKey.adminKey)
             record = rec
+            if let sealing, !sealing.isSealed { try sealing.seal(with: dk) }
+            dataKey = dk
             defaultPIN = pin == Self.factoryPIN || enrolled.token.pinToBeChanged
             open(byRecovery: false)
             await log(.manageAccess, "ключ администратора записан на токен \(rec.keyID)", nil)
@@ -251,11 +293,13 @@ public actor AdminLock {
     public func unlock(pin: String) async throws -> UnlockResult {
         guard let record else { throw AdminLockError.notSetUp }
         do {
-            let token = try key.verify(pin: pin, keyID: record.keyID, proof: record.proof)
-            defaultPIN = pin == Self.factoryPIN || token.pinToBeChanged
+            let verified = try key.verify(pin: pin, keyID: record.keyID, proof: record.proof)
+            let newCode = try openSealed(tokenSecret: verified.secret)
+            defaultPIN = pin == Self.factoryPIN || verified.token.pinToBeChanged
             open(byRecovery: false)
             await log(.adminLogin, "по ключу \(record.keyID)", nil)
-            return UnlockResult(defaultPIN: defaultPIN)
+            if newCode != nil { await log(.manageAccess, "пароли зашифрованы ключом, выдан новый код восстановления", nil) }
+            return UnlockResult(defaultPIN: defaultPIN, newRecoveryCode: newCode)
         } catch {
             await log(.adminLogin, "по ключу \(record.keyID)", error)
             throw error
@@ -270,7 +314,14 @@ public actor AdminLock {
             await log(.adminLogin, "по коду восстановления", AdminLockError.wrongRecoveryCode)
             throw AdminLockError.wrongRecoveryCode
         }
+        if let wrapped = record.sealKeyByRecovery, let sealing, sealing.isSealed {
+            let dk = try KeyWrap.unwrap(wrapped, with: Self.recoveryKeyMaterial(recoveryCode, salt: record.recoverySalt),
+                                        context: Self.recoveryContext)
+            try sealing.open(with: dk)
+            dataKey = dk
+        }
         open(byRecovery: true)
+        if dataKey != nil { onSecretsOpened?() }
         await log(.adminLogin, "по коду восстановления", nil)
     }
 
@@ -279,6 +330,8 @@ public actor AdminLock {
         refreshPresence()
         state = .locked
         byRecovery = false
+        sealing?.close()
+        dataKey = nil
         changed()
     }
 
@@ -302,6 +355,7 @@ public actor AdminLock {
         guard state == .unlocked else { throw AdminLockError.locked }
         let code = RecoveryCode.make()
         rec.recoveryHash = RecoveryCode.hash(code, salt: rec.recoverySalt)
+        if let dk = dataKey { rec.sealKeyByRecovery = try Self.wrap(dk, recoveryCode: code, salt: rec.recoverySalt) }
         try secrets.set(try Self.encode(rec), for: SecretKey.adminKey)
         record = rec
         await log(.manageAccess, "новый код восстановления", nil)
@@ -325,8 +379,14 @@ public actor AdminLock {
     public func disable() async throws {
         guard record != nil else { return }
         guard state == .unlocked else { throw AdminLockError.locked }
+        // Back in the clear first: without the record nothing could open them.
+        if let sealing, sealing.isSealed {
+            guard dataKey != nil else { throw AdminLockError.locked }
+            try sealing.unseal()
+        }
         try secrets.remove(SecretKey.adminKey)
         record = nil
+        dataKey = nil
         state = .off
         byRecovery = false
         defaultPIN = false
@@ -404,6 +464,47 @@ public actor AdminLock {
         self.byRecovery = byRecovery
         lastActivity = now()
         changed()
+    }
+
+    static let tokenContext = "token"
+    static let recoveryContext = "recovery"
+
+    static func recoveryKeyMaterial(_ code: String, salt: String) -> [UInt8] {
+        Array((salt + ":" + RecoveryCode.normalize(code)).utf8)
+    }
+
+    static func wrap(_ dk: [UInt8], recoveryCode code: String, salt: String) throws -> String {
+        try KeyWrap.wrap(dk, with: recoveryKeyMaterial(code, salt: salt), context: recoveryContext)
+    }
+
+    /// Opens the sealed passwords with the token secret. A record from before
+    /// sealing gets a key now: the passwords are sealed and, since the old
+    /// recovery code was never kept, a new one is made and returned.
+    private func openSealed(tokenSecret: [UInt8]) throws -> String? {
+        guard var rec = record else { return nil }
+        if let wrapped = rec.sealKeyByToken {
+            let dk = try KeyWrap.unwrap(wrapped, with: tokenSecret, context: Self.tokenContext)
+            if let sealing {
+                if sealing.isSealed { try sealing.open(with: dk) } else { try sealing.seal(with: dk) }
+            }
+            dataKey = dk
+            onSecretsOpened?()
+            return nil
+        }
+        guard let sealing else { return nil }
+        // Sealed already but the record lost its wrap: nothing can open it.
+        guard !sealing.isSealed else { throw SealError.wrongKey }
+        let dk = KeyWrap.newDataKey()
+        let code = RecoveryCode.make()
+        rec.recoveryHash = RecoveryCode.hash(code, salt: rec.recoverySalt)
+        rec.sealKeyByToken = try KeyWrap.wrap(dk, with: tokenSecret, context: Self.tokenContext)
+        rec.sealKeyByRecovery = try Self.wrap(dk, recoveryCode: code, salt: rec.recoverySalt)
+        try secrets.set(try Self.encode(rec), for: SecretKey.adminKey)
+        record = rec
+        try sealing.seal(with: dk)
+        dataKey = dk
+        onSecretsOpened?()
+        return code
     }
 
     private func changed() {

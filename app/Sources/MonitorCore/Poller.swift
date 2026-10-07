@@ -257,7 +257,10 @@ public actor Poller {
         })
         let results = await withTaskGroup(of: (ServerConfig, PollResult).self) { group in
             for s in list {
-                let push = pushedTargets[s.id] == wanted[s.id] ? nil : wanted[s.id]
+                // A site whose password is sealed while the app is locked
+                // would reach the agent without it; keep the agent's list.
+                let held = sites.contains { $0.authLocked && $0.checked(from: s) }
+                let push = held || pushedTargets[s.id] == wanted[s.id] ? nil : wanted[s.id]
                 group.addTask { [client, store] in
                     (s, await Poller.poll(s, client: client, store: store, push: push,
                                           interval: wantInterval, now: now))

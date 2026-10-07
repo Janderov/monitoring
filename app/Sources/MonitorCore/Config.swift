@@ -110,6 +110,9 @@ public struct SiteConfig: Codable, Equatable, Identifiable, Sendable {
     /// prompt. The password is kept in Keychain, never in the file.
     public var authUser: String?
     public var authPassword: String? = nil
+    /// The password is sealed by the admin key and the app is locked: agents
+    /// keep the login they have until it is unlocked (see Poller).
+    public var authLocked = false
 
     enum CodingKeys: String, CodingKey {
         case id, name, url, group, tags, from, thresholds, authUser

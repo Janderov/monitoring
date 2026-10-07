@@ -20,7 +20,7 @@ public enum SecretKey {
     public static let adminKey = "admin-key"
 }
 
-public final class MemorySecrets: SecretStore, @unchecked Sendable {
+public final class MemorySecrets: SecretStore, SecretListing, @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: String]
 
@@ -29,6 +29,7 @@ public final class MemorySecrets: SecretStore, @unchecked Sendable {
     public func get(_ account: String) throws -> String? { lock.withLock { values[account] } }
     public func set(_ value: String, for account: String) throws { lock.withLock { values[account] = value } }
     public func remove(_ account: String) throws { lock.withLock { _ = values.removeValue(forKey: account) } }
+    public func accounts() throws -> [String] { lock.withLock { Array(values.keys) } }
 }
 
 /// Raw items of one secret store: in Keychain, one generic password per
@@ -51,7 +52,7 @@ public protocol SecretItems: Sendable {
 ///
 /// Items saved by older versions (one per account) are moved into the vault
 /// the first time it is missing, then deleted.
-public final class VaultSecrets: SecretStore, @unchecked Sendable {
+public final class VaultSecrets: SecretStore, SecretListing, @unchecked Sendable {
     public static let vaultAccount = "vault"
 
     private let items: SecretItems
@@ -79,6 +80,10 @@ public final class VaultSecrets: SecretStore, @unchecked Sendable {
             guard all.removeValue(forKey: account) != nil else { return }
             try save(all)
         }
+    }
+
+    public func accounts() throws -> [String] {
+        try lock.withLock { Array(try loaded().keys) }
     }
 
     private func loaded() throws -> [String: String] {
@@ -111,15 +116,17 @@ public final class VaultSecrets: SecretStore, @unchecked Sendable {
 
 #if canImport(Security)
 /// Secrets in the login keychain under service com.janderov.monitor, all in
-/// one vault item (see VaultSecrets). Every instance for a service shares one
-/// vault, so the item is read once per run.
-public struct KeychainSecrets: SecretStore {
+/// one vault item (see VaultSecrets), with SSH and site passwords and the
+/// GitHub token sealed by the admin key (see SealedSecrets). Every instance
+/// for a service shares one vault, so the item is read once per run and an
+/// unlock opens the sealed secrets for every screen.
+public struct KeychainSecrets: SealingStore {
     public let service: String
-    private let vault: VaultSecrets
+    private let vault: SealedSecrets
 
     private final class Vaults: @unchecked Sendable {
         let lock = NSLock()
-        var byService: [String: VaultSecrets] = [:]
+        var byService: [String: SealedSecrets] = [:]
     }
     private static let vaults = Vaults()
 
@@ -128,7 +135,7 @@ public struct KeychainSecrets: SecretStore {
         let vaults = Self.vaults
         vault = vaults.lock.withLock {
             if let v = vaults.byService[service] { return v }
-            let v = VaultSecrets(items: KeychainItems(service: service))
+            let v = SealedSecrets(base: VaultSecrets(items: KeychainItems(service: service)))
             vaults.byService[service] = v
             return v
         }
@@ -137,6 +144,7 @@ public struct KeychainSecrets: SecretStore {
     public func get(_ account: String) throws -> String? { try vault.get(account) }
     public func set(_ value: String, for account: String) throws { try vault.set(value, for: account) }
     public func remove(_ account: String) throws { try vault.remove(account) }
+    public var sealing: SealedSecrets { vault }
 }
 
 /// Generic passwords in the login keychain, one per account.
