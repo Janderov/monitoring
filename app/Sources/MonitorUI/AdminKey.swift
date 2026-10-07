@@ -474,9 +474,8 @@ private struct RecoveryCodeView: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
-                Button(copied ? "Скопировано" : "Скопировать") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(code, forType: .string)
+                Button(copied ? "Скопировано на минуту" : "Скопировать") {
+                    SecretClipboard.copy(code)
                     copied = true
                 }
                 Button("Я записал", action: onDone).keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)

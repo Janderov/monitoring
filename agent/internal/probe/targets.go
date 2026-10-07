@@ -218,6 +218,11 @@ var httpClient = &http.Client{
 		if len(via) >= 5 {
 			return errors.New("too many redirects")
 		}
+		// A site password goes only over HTTPS: stop rather than follow a
+		// redirect that would resend it in the clear.
+		if via[0].Header.Get("Authorization") != "" && req.URL.Scheme != "https" {
+			return errors.New("перенаправление на http: пароль сайта не отправлен")
+		}
 		return nil
 	},
 }
@@ -231,8 +236,12 @@ func probeHTTP(ctx context.Context, t Target) collect.Check {
 	}
 	req.Header.Set("User-Agent", "monitor-agent")
 	if t.BasicAuth != nil {
-		req.SetBasicAuth(t.BasicAuth.User, t.BasicAuth.Password)
 		c.Auth = true
+		if req.URL.Scheme != "https" {
+			c.Error = "пароль сайта отправляется только по https"
+			return c
+		}
+		req.SetBasicAuth(t.BasicAuth.User, t.BasicAuth.Password)
 	}
 	start := time.Now()
 	resp, err := httpClient.Do(req)

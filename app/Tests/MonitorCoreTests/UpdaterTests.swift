@@ -82,4 +82,14 @@ final class UpdaterTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
         XCTAssertTrue(h.requests.last!.hasSuffix("/actions/artifacts/901/zip"))
     }
+
+    func testSignerMustMatchOnceSigned() throws {
+        // Ad hoc today: any build that passes codesign is accepted.
+        XCTAssertNoThrow(try AppUpdater.checkSigner(current: nil, new: nil))
+        XCTAssertNoThrow(try AppUpdater.checkSigner(current: nil, new: "TEAM123456"))
+        // Signed: only the same team.
+        XCTAssertNoThrow(try AppUpdater.checkSigner(current: "TEAM123456", new: "TEAM123456"))
+        XCTAssertThrowsError(try AppUpdater.checkSigner(current: "TEAM123456", new: nil))
+        XCTAssertThrowsError(try AppUpdater.checkSigner(current: "TEAM123456", new: "OTHER00000"))
+    }
 }

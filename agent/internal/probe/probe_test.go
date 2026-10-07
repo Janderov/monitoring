@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -75,13 +76,26 @@ func TestRunHTTPAndTCP(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer bad.Close()
-	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	authHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if u, p, ok := r.BasicAuth(); ok && u == "u" && p == "right" {
 			return
 		}
 		w.WriteHeader(http.StatusUnauthorized)
-	}))
+	})
+	auth := httptest.NewTLSServer(authHandler)
 	defer auth.Close()
+	// Plain http: the password must never be sent there.
+	var leaked atomic.Bool
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := r.BasicAuth(); ok {
+			leaked.Store(true)
+		}
+	}))
+	defer plain.Close()
+	downgrade := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL, http.StatusFound)
+	}))
+	defer downgrade.Close()
 	// The test server's certificate is self-signed; trust it for this test.
 	tr := httpClient.Transport.(*http.Transport)
 	tr.TLSClientConfig.RootCAs = ok.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
@@ -97,6 +111,8 @@ func TestRunHTTPAndTCP(t *testing.T) {
 		{ID: "auth", Kind: "http", URL: auth.URL},
 		{ID: "auth-ok", Kind: "http", URL: auth.URL, BasicAuth: &BasicAuth{User: "u", Password: "right"}},
 		{ID: "auth-bad", Kind: "http", URL: auth.URL, BasicAuth: &BasicAuth{User: "u", Password: "wrong"}},
+		{ID: "auth-http", Kind: "http", URL: plain.URL, BasicAuth: &BasicAuth{User: "u", Password: "right"}},
+		{ID: "auth-downgrade", Kind: "http", URL: downgrade.URL, BasicAuth: &BasicAuth{User: "u", Password: "right"}},
 	})
 	if r := res[0]; !r.OK || r.StatusCode != 200 || r.TLSExpiry == nil || r.TLSExpiry.Before(time.Now()) {
 		t.Errorf("ok = %+v", r)
@@ -119,6 +135,16 @@ func TestRunHTTPAndTCP(t *testing.T) {
 	}
 	if r := res[6]; r.OK || r.StatusCode != 401 || !r.Auth || r.Error == "" {
 		t.Errorf("auth-bad = %+v", r)
+	}
+	// Over http, or redirected from https to http, the password stays home.
+	if r := res[7]; r.OK || r.Error == "" {
+		t.Errorf("auth-http = %+v", r)
+	}
+	if r := res[8]; r.OK || r.Error == "" {
+		t.Errorf("auth-downgrade = %+v", r)
+	}
+	if leaked.Load() {
+		t.Error("password sent over plain http")
 	}
 }
 
