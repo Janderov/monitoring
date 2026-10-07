@@ -333,7 +333,7 @@ struct AdminKeySettings: View {
                 } else if tokens.count > 1 {
                     Text("Вставлено несколько токенов, оставьте один.").foregroundStyle(.orange)
                 } else if let t = tokens.first {
-                    LabeledContent("Токен", value: [t.label.isEmpty ? t.model : t.label, t.serial]
+                    LabeledContent("Токен", value: [t.displayName, t.serial]
                         .filter { !$0.isEmpty }.joined(separator: " · "))
                     SecureField("PIN токена", text: $pin, prompt: Text("заводской 12345678"))
                 }

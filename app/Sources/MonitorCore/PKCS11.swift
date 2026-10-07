@@ -16,6 +16,18 @@ public struct TokenInfo: Equatable, Sendable {
     public var pinFinalTry: Bool { flags & PKCS11.CKF_USER_PIN_FINAL_TRY != 0 }
     public var pinCountLow: Bool { flags & PKCS11.CKF_USER_PIN_COUNT_LOW != 0 }
     public var pinToBeChanged: Bool { flags & PKCS11.CKF_USER_PIN_TO_BE_CHANGED != 0 }
+
+    /// Name to show: the label without the driver's "<no label>" filler, else the model.
+    public var displayName: String {
+        let name = Self.cleanName(label)
+        return name.isEmpty ? model : name
+    }
+
+    /// Rutoken reports an unnamed token as "Rutoken lite <no label>": drop the filler.
+    public static func cleanName(_ name: String) -> String {
+        name.replacingOccurrences(of: "<no label>", with: "", options: .caseInsensitive)
+            .trimmingCharacters(in: .whitespaces)
+    }
 }
 
 public enum TokenError: Error, Equatable, CustomStringConvertible, Sendable {

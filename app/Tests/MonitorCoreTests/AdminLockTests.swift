@@ -413,3 +413,13 @@ final class PKCS11Tests: XCTestCase {
         }
     }
 }
+
+final class TokenNameTests: XCTestCase {
+    func testNoLabelFillerIsDropped() {
+        XCTAssertEqual(TokenInfo(slot: 0, serial: "1", label: "Rutoken lite <no label>", model: "Rutoken Lite").displayName,
+                       "Rutoken lite")
+        XCTAssertEqual(TokenInfo(slot: 0, serial: "1", label: "<no label>", model: "Rutoken Lite").displayName, "Rutoken Lite")
+        XCTAssertEqual(TokenInfo(slot: 0, serial: "1", label: "Мой ключ", model: "Rutoken Lite").displayName, "Мой ключ")
+        XCTAssertEqual(TokenInfo.cleanName("Rutoken lite <NO LABEL>"), "Rutoken lite")
+    }
+}

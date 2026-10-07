@@ -74,7 +74,7 @@ public struct RutokenLiteKey: AdminKey {
                 throw TokenError.failed("проверка записи", 0)
             }
         }
-        let name = token.label.isEmpty ? token.model : token.label
+        let name = token.displayName
         return EnrolledKey(keyID: token.serial, keyName: name.isEmpty ? "Рутокен" : name,
                            proof: Digest.sha256Hex(secret), token: token)
     }
@@ -215,7 +215,7 @@ public actor AdminLock {
     }
 
     public func status() -> AdminLockStatus {
-        AdminLockStatus(state: state, presence: presence, keyName: record?.keyName, keyID: record?.keyID,
+        AdminLockStatus(state: state, presence: presence, keyName: record.map { TokenInfo.cleanName($0.keyName) }, keyID: record?.keyID,
                         unlockedByRecovery: state == .unlocked && byRecovery, defaultPIN: defaultPIN)
     }
 
