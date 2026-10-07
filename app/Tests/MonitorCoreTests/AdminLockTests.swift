@@ -155,6 +155,22 @@ final class AdminLockTests: XCTestCase {
         XCTAssertFalse(log.contains { $0.detail.contains("246810") || ($0.error ?? "").contains("246810") })
     }
 
+    func testRenameNeedsUnlockAndSurvivesRestart() async throws {
+        let tokens = FakeTokens()
+        _ = tokens.insert("49184CCA")
+        let secrets = MemorySecrets()
+        let lock = AdminLock(key: RutokenLiteKey(driver: tokens), secrets: secrets)
+        _ = try await lock.enroll(pin: "12345678")
+        try await lock.rename("  Rutoken lite Mihail ")
+        let s = await lock.status()
+        XCTAssertEqual(s.keyName, "Rutoken lite Mihail")
+
+        let again = AdminLock(key: RutokenLiteKey(driver: tokens), secrets: secrets)
+        let s1 = await again.status()
+        XCTAssertEqual(s1.keyName, "Rutoken lite Mihail")
+        do { try await again.rename("other"); XCTFail() } catch { XCTAssertEqual(error as? AdminLockError, .locked) }
+    }
+
     func testPullingTheTokenLocks() async throws {
         let tokens = FakeTokens()
         let token = tokens.insert("AAA")
@@ -411,5 +427,15 @@ final class PKCS11Tests: XCTestCase {
             try s.deleteData(label: RutokenLiteKey.label)
             XCTAssertNil(try s.readData(label: RutokenLiteKey.label))
         }
+    }
+}
+
+final class TokenNameTests: XCTestCase {
+    func testNoLabelFillerIsDropped() {
+        XCTAssertEqual(TokenInfo(slot: 0, serial: "1", label: "Rutoken lite <no label>", model: "Rutoken Lite").displayName,
+                       "Rutoken lite")
+        XCTAssertEqual(TokenInfo(slot: 0, serial: "1", label: "<no label>", model: "Rutoken Lite").displayName, "Rutoken Lite")
+        XCTAssertEqual(TokenInfo(slot: 0, serial: "1", label: "Мой ключ", model: "Rutoken Lite").displayName, "Мой ключ")
+        XCTAssertEqual(TokenInfo.cleanName("Rutoken lite <NO LABEL>"), "Rutoken lite")
     }
 }

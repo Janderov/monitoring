@@ -74,7 +74,7 @@ public struct RutokenLiteKey: AdminKey {
                 throw TokenError.failed("проверка записи", 0)
             }
         }
-        let name = token.label.isEmpty ? token.model : token.label
+        let name = token.displayName
         return EnrolledKey(keyID: token.serial, keyName: name.isEmpty ? "Рутокен" : name,
                            proof: Digest.sha256Hex(secret), token: token)
     }
@@ -215,7 +215,7 @@ public actor AdminLock {
     }
 
     public func status() -> AdminLockStatus {
-        AdminLockStatus(state: state, presence: presence, keyName: record?.keyName, keyID: record?.keyID,
+        AdminLockStatus(state: state, presence: presence, keyName: record.map { TokenInfo.cleanName($0.keyName) }, keyID: record?.keyID,
                         unlockedByRecovery: state == .unlocked && byRecovery, defaultPIN: defaultPIN)
     }
 
@@ -306,6 +306,19 @@ public actor AdminLock {
         record = rec
         await log(.manageAccess, "новый код восстановления", nil)
         return code
+    }
+
+    /// Renames the key as it shows in the app (the token itself is not touched).
+    public func rename(_ name: String) async throws {
+        guard var rec = record else { throw AdminLockError.notSetUp }
+        guard state == .unlocked else { throw AdminLockError.locked }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != rec.keyName else { return }
+        rec.keyName = name
+        try secrets.set(try Self.encode(rec), for: SecretKey.adminKey)
+        record = rec
+        changed()
+        await log(.manageAccess, "ключ \(rec.keyID) назван «\(name)»", nil)
     }
 
     /// Turns key login off; the app then works without it, as before setup.
