@@ -39,7 +39,11 @@ public actor ConfigRepository {
         if moved { try write(file) }
         if var sites = file.sites {
             for i in sites.indices where sites[i].authUser != nil {
-                sites[i].authPassword = try secrets.get(SecretKey.siteAuth(sites[i].id))
+                do {
+                    sites[i].authPassword = try secrets.get(SecretKey.siteAuth(sites[i].id))
+                } catch is SecretsLockedError {
+                    sites[i].authLocked = true
+                }
             }
             file.sites = sites
         }

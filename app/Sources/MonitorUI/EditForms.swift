@@ -134,7 +134,7 @@ struct SiteForm: View {
         if trimmed(url).isEmpty { return nil }
         if host == nil { return "Адрес вида https://example.ru" }
         if !everywhere && from.isEmpty { return "Выберите хотя бы один сервер" }
-        if !trimmed(authUser).isEmpty, authPassword.isEmpty, original?.authPassword == nil { return "Введите пароль для проверки" }
+        if !trimmed(authUser).isEmpty, authPassword.isEmpty, original?.authPassword == nil, original?.authLocked != true { return "Введите пароль для проверки" }
         if original == nil, model.siteConfigs.contains(where: { URL(string: $0.url)?.host?.lowercased() == host }) {
             return "Этот сайт уже есть в списке"
         }
@@ -174,7 +174,7 @@ struct SiteForm: View {
                 Section {
                     TextField("Логин", text: $authUser, prompt: Text("если сайт просит пароль"))
                     SecureField("Пароль", text: $authPassword,
-                                prompt: Text(original?.authPassword == nil ? "" : "сохранён, введите новый, чтобы сменить"))
+                                prompt: Text(original?.authPassword == nil && original?.authLocked != true ? "" : "сохранён, введите новый, чтобы сменить"))
                 } header: {
                     Text("Логин и пароль для проверки")
                 } footer: {

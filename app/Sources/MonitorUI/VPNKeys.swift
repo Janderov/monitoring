@@ -108,13 +108,11 @@ struct NewVPNKeySheet: View {
                 }
                 if let link = r.amneziaLink {
                     Button("Скопировать ссылку vpn://") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(link, forType: .string)
+                        SecretClipboard.copy(link)
                     }
                 }
                 Button(r.amneziaLink == nil ? "Скопировать" : "Скопировать .conf") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(r.config, forType: .string)
+                    SecretClipboard.copy(r.config)
                 }
                 Spacer()
                 Button("Готово") { dismiss() }.keyboardShortcut(.defaultAction)

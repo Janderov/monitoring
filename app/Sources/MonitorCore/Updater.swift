@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Security)
+import Security
+#endif
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -143,6 +146,16 @@ public struct AppUpdater: Sendable {
         return file
     }
 
+    /// Once the running app is signed with a certificate (docs/signing.md),
+    /// only builds signed by the same team are installed, so a build from
+    /// anywhere else cannot take over the app and its Keychain secrets.
+    public static func checkSigner(current: String?, new: String?) throws {
+        guard let current else { return }
+        guard new == current else {
+            throw UpdateError("сборка подписана не вашим сертификатом (\(new ?? "без подписи")), обновление отменено")
+        }
+    }
+
     #if os(macOS)
     /// Unpacks the download, checks it is Monitor.app, swaps it in for the
     /// running bundle and opens it; the new copy quits this one on launch
@@ -166,6 +179,7 @@ public struct AppUpdater: Sendable {
         else { throw UpdateError("в скачанной сборке нет Monitor.app") }
         try? Self.run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", newApp.path])
         try Self.run("/usr/bin/codesign", ["--verify", newApp.path])
+        try Self.checkSigner(current: Self.teamID(of: app), new: Self.teamID(of: newApp))
 
         // Swap: old bundle aside, new one in place; the running process keeps
         // its already-open files.
@@ -178,6 +192,16 @@ public struct AppUpdater: Sendable {
             throw UpdateError("не удалось заменить \(app.path): \(error.localizedDescription)")
         }
         try Self.run("/usr/bin/open", ["-n", app.path])
+    }
+
+    /// Team ID in a bundle's signature; nil when signed ad hoc.
+    static func teamID(of bundle: URL) -> String? {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(bundle as CFURL, [], &code) == errSecSuccess, let code else { return nil }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess
+        else { return nil }
+        return (info as NSDictionary?)?[kSecCodeInfoTeamIdentifier as String] as? String
     }
 
     static func run(_ path: String, _ args: [String]) throws {

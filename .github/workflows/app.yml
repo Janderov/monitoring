@@ -14,6 +14,9 @@ concurrency:
   group: app-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # The core (models, alert rules, SQLite, poller) is plain Swift and is
   # tested on Linux, which is cheap and fast.

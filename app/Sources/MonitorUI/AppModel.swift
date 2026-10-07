@@ -93,6 +93,10 @@ public final class AppModel: ObservableObject {
                     self.noteLock(status)
                 }
             }
+            // Site logins sealed while locked reach the agents after unlock.
+            await lock.setOnSecretsOpened { [unowned self] in
+                Task { @MainActor in await self.reload() }
+            }
         }
         await reload()
     }
