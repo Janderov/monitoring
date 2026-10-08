@@ -69,6 +69,11 @@ if getent group docker >/dev/null; then
   usermod -aG docker monitor-agent
 fi
 
+# adm lets the agent read /var/log/auth.log: failed SSH logins over the day.
+if getent group adm >/dev/null; then
+  usermod -aG adm monitor-agent
+fi
+
 install -m 0755 "$BINARY" /usr/local/bin/monitor-agent
 
 if [[ ! -f "$CONF" ]]; then

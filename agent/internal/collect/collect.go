@@ -36,7 +36,11 @@ type Snapshot struct {
 	// Forwards: client traffic this server passes on (NAT), by real destination.
 	Forwards []Link `json:"forwards,omitempty"`
 	// Inbound: connections from public addresses to this server, by source.
-	Inbound []Link   `json:"inbound,omitempty"`
+	Inbound []Link `json:"inbound,omitempty"`
+	// Host care, refreshed every few minutes: updates, SSH logins, backups.
+	System  *System  `json:"system,omitempty"`
+	SSH     *SSHLog  `json:"ssh,omitempty"`
+	Backups []Backup `json:"backups,omitempty"`
 	Errors  []string `json:"errors,omitempty"`
 }
 
