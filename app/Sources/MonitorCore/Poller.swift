@@ -74,6 +74,9 @@ public actor Poller {
     private var rebooting: [String: Date] = [:]
     /// When each unreachable server first stopped answering.
     private var failingSince: [String: Date] = [:]
+    /// Newest sample time of each server, and since when it has not moved.
+    private var sampleTimes: [String: Date] = [:]
+    private var frozenSince: [String: Date] = [:]
     private var macOffline = false
     /// How long a reboot may take before it counts as a plain outage.
     public static let rebootGrace: TimeInterval = 10 * 60
@@ -146,6 +149,8 @@ public actor Poller {
             statuses[old.id] = nil
             rebooting[old.id] = nil
             failingSince[old.id] = nil
+            sampleTimes[old.id] = nil
+            frozenSince[old.id] = nil
         }
         engine.retain(serverIDs: ids.union(sites.map { SiteStatus.alertID($0.id) }))
         pushedTargets = pushedTargets.filter { ids.contains($0.key) }
@@ -351,8 +356,21 @@ public actor Poller {
             let outcome: PollOutcome = r.snapshot.map { .snapshot($0) } ?? .failure(r.error ?? "нет ответа")
             // A server rebooting on request is expected to be silent for a while.
             let expectedSilence = r.snapshot == nil && rebooting[s.id] != nil
+            if let snap = r.snapshot {
+                if let last = sampleTimes[s.id], snap.time <= last {
+                    if frozenSince[s.id] == nil { frozenSince[s.id] = now }
+                } else {
+                    frozenSince[s.id] = nil
+                    sampleTimes[s.id] = snap.time
+                }
+            } else {
+                // No answer is its own alert; frozen sampling is counted
+                // again from the next answer.
+                frozenSince[s.id] = nil
+            }
             if !macOffline && !expectedSilence {
-                let ev = engine.process(server: s, outcome: outcome, now: now)
+                let extra = [Rules.stale(frozenSince: frozenSince[s.id], now: now)].compactMap { $0 }
+                let ev = engine.process(server: s, outcome: outcome, extra: extra, now: now)
                 events += ev
                 for e in ev { try? await store.addEvent(e) }
             }

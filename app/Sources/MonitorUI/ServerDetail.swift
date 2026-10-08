@@ -40,6 +40,15 @@ struct ServerDetail: View {
         case metrics = "Метрики", services = "Сервисы", containers = "Контейнеры", databases = "Базы данных", vpn = "VPN",
              processes = "Процессы", checks = "Проверки", care = "Обслуживание", events = "События"
         var id: String { rawValue }
+
+        var short: String {
+            switch self {
+            case .databases: return "Базы"
+            case .containers: return "Docker"
+            case .care: return "Обслуж."
+            default: return rawValue
+            }
+        }
     }
 
     @ObservedObject var model: AppModel
@@ -63,16 +72,13 @@ struct ServerDetail: View {
                     Label(e, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }
                 facts
-                // A segmented control cannot shrink below its labels, so a
-                // narrow pane gets two rows of it, and only a very narrow one
-                // a pop-up menu.
+                agentNote
+                // One segmented control in one row. A narrower pane gets
+                // shorter names, and a very narrow one scrolls the row.
                 ViewThatFits(in: .horizontal) {
-                    tabPicker.pickerStyle(.segmented).fixedSize()
-                    VStack(alignment: .leading, spacing: 6) {
-                        tabRow(Array(Tab.allCases.prefix(5)))
-                        tabRow(Array(Tab.allCases.dropFirst(5)))
-                    }
-                    tabPicker.pickerStyle(.menu).fixedSize()
+                    tabPicker(short: false)
+                    tabPicker(short: true)
+                    ScrollView(.horizontal, showsIndicators: false) { tabPicker(short: true) }
                 }
                 if tab == .metrics {
                     HStack {
@@ -92,23 +98,13 @@ struct ServerDetail: View {
         }
     }
 
-    /// One row of the two-row tab bar; shows no selection while the chosen
-    /// tab is in the other row.
-    private func tabRow(_ tabs: [Tab]) -> some View {
-        Picker("Раздел", selection: Binding<Tab?>(get: { tabs.contains(tab) ? tab : nil },
-                                                 set: { if let t = $0 { tab = t } })) {
-            ForEach(tabs) { t in Text(t.rawValue).tag(Optional(t)) }
+    private func tabPicker(short: Bool) -> some View {
+        Picker("Раздел", selection: $tab) {
+            ForEach(Tab.allCases) { t in Text(short ? t.short : t.rawValue).tag(t) }
         }
         .labelsHidden()
         .pickerStyle(.segmented)
         .fixedSize()
-    }
-
-    private var tabPicker: some View {
-        Picker("Раздел", selection: $tab) {
-            ForEach(Tab.allCases) { t in Text(t.rawValue).tag(t) }
-        }
-        .labelsHidden()
     }
 
     private var header: some View {
@@ -157,7 +153,22 @@ struct ServerDetail: View {
                 } ?? "—")
                 Fact(title: "Процессор", value: snap.map { "\($0.cpu.cores) ядер" } ?? "—")
                 Fact(title: "Обновлено", value: status.lastSeen.map(Fmt.relative) ?? "нет данных")
+                Fact(title: "Агент", value: snap.map { $0.agentVersion ?? "старая версия" } ?? "—")
             }
+        }
+    }
+
+    /// The agent is older than the one this app carries.
+    @ViewBuilder private var agentNote: some View {
+        if AgentBundle.outdated(snap), model.backend.canInstallAgent, model.can(.installAgent, status.server) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.down.circle").foregroundStyle(.orange)
+                Text("Агент устарел: в приложении версия \(AgentBundle.version ?? "новее")")
+                Spacer(minLength: 8)
+                Button("Обновить агентов…") { model.present(.updateAgents) }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
         }
     }
 

@@ -34,6 +34,9 @@ public struct Snapshot: Codable, Equatable, Sendable {
     public var system: System?
     public var ssh: SSHLog?
     public var backups: [Backup]?
+    /// Version of the agent that took the snapshot; nil from agents before it
+    /// reported one, which are outdated by definition.
+    public var agentVersion: String?
 
     /// The OS and pending Ubuntu updates, as update-notifier last counted them.
     public struct System: Codable, Equatable, Sendable {

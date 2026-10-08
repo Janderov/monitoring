@@ -9,6 +9,10 @@
 # Options: --host <IP or name> (repeatable, added to the certificate), --port <port> (default 9443).
 # Prints the certificate fingerprint at the end; the Mac app pins it.
 # Re-running upgrades the binary and keeps the existing config, certificate and token.
+# An upgrade keeps the previous binary as monitor-agent.prev. If the new one
+# does not stay up and listening for 10 seconds, the previous one is put back,
+# the reason is printed on "rollback:" lines and the script exits with code 3.
+#   sudo ./install.sh --rollback   puts the previous binary back by hand.
 set -euo pipefail
 
 BINARY=""
@@ -16,6 +20,7 @@ TOKEN=""
 TOKEN_FILE=""
 HOSTS=()
 PORT=9443
+ROLLBACK=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -25,6 +30,7 @@ while [[ $# -gt 0 ]]; do
     --token-file) TOKEN_FILE="$2"; shift 2 ;;
     --host)   HOSTS+=("$2"); shift 2 ;;
     --port)   PORT="$2"; shift 2 ;;
+    --rollback) ROLLBACK=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -36,7 +42,41 @@ die() { echo "install: $*" >&2; exit 1; }
 
 CONF_DIR=/etc/monitor-agent
 CONF="$CONF_DIR/config.json"
+BIN=/usr/local/bin/monitor-agent
+PREV="$BIN.prev"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# The agent port from the existing config, else --port.
+agent_port() {
+  local p
+  p="$(grep -o '"listen"[^,}]*' "$CONF" 2>/dev/null | grep -o '[0-9]*"' | tr -d '"' | tail -1)"
+  echo "${p:-$PORT}"
+}
+
+# The service stays active and listens on its port for 10 seconds in a row.
+healthy() {
+  local port ok=0 i
+  port="$(agent_port)"
+  for i in $(seq 1 20); do
+    sleep 1
+    if systemctl is-active --quiet monitor-agent \
+       && { ! command -v ss >/dev/null || ss -ltn | grep -Eq "[:.]${port}[[:space:]]"; }; then
+      ok=$((ok + 1))
+      [[ $ok -ge 10 ]] && return 0
+    else
+      ok=0
+    fi
+  done
+  return 1
+}
+
+if [[ -n "$ROLLBACK" ]]; then
+  [[ -f "$PREV" ]] || die "no previous version to go back to"
+  install -m 0755 "$PREV" "$BIN"
+  systemctl restart monitor-agent
+  echo "monitor-agent $("$BIN" version) restored"
+  exit 0
+fi
 UNIT_SRC="$HERE/monitor-agent.service"
 [[ -f "$UNIT_SRC" ]] || die "monitor-agent.service must be next to install.sh"
 # Optional root helper for NAT and inbound connections (older bundles lack it).
@@ -74,7 +114,12 @@ if getent group adm >/dev/null; then
   usermod -aG adm monitor-agent
 fi
 
-install -m 0755 "$BINARY" /usr/local/bin/monitor-agent
+UPGRADE=""
+if [[ -x "$BIN" && -f "$CONF" ]]; then
+  UPGRADE=1
+  cp -p "$BIN" "$PREV"
+fi
+install -m 0755 "$BINARY" "$BIN"
 
 if [[ ! -f "$CONF" ]]; then
   init_args=()
@@ -101,6 +146,16 @@ install -m 0644 "$UNIT_SRC" /etc/systemd/system/monitor-agent.service
 systemctl daemon-reload
 systemctl enable monitor-agent >/dev/null
 systemctl restart monitor-agent
+if ! healthy; then
+  echo "rollback: the new agent did not start; its last log lines:"
+  journalctl -u monitor-agent -n 8 --no-pager -o cat 2>/dev/null | sed 's/^/rollback:   /' || true
+  if [[ -n "$UPGRADE" ]]; then
+    install -m 0755 "$PREV" "$BIN"
+    systemctl restart monitor-agent
+    echo "rollback: previous version $("$BIN" version 2>/dev/null || echo ?) restored"
+  fi
+  exit 3
+fi
 if [[ -f "$FLOWS_SRC" ]]; then
   install -m 0644 "$FLOWS_SRC" /etc/systemd/system/monitor-agent-flows.service
   systemctl daemon-reload

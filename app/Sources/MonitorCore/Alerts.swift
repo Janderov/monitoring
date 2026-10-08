@@ -68,6 +68,17 @@ public enum PollOutcome: Sendable {
 public enum Rules {
     /// Server unreachable: 3 failed polls in a row before notifying.
     public static let downAfter = 3
+    /// The agent answers but its newest sample has not changed for this long:
+    /// its sampling hangs (Docker, a slow disk).
+    public static let staleAfter: TimeInterval = 3 * 60
+
+    /// `frozenSince`: when the Mac first got the same sample again.
+    public static func stale(frozenSince: Date?, now: Date) -> Condition? {
+        guard let since = frozenSince, now.timeIntervalSince(since) >= staleAfter else { return nil }
+        let minutes = Int(now.timeIntervalSince(since) / 60)
+        return Condition(key: "stale", severity: .warning,
+                         message: "данные агента не обновляются \(minutes) мин: замеры на сервере зависли")
+    }
     /// A disk, CPU or memory alert clears only this many points below its
     /// threshold, so a value hovering at the limit does not ring every minute.
     public static let hysteresis: Double = 5
@@ -213,12 +224,15 @@ public struct AlertEngine: Sendable {
 
     public init() {}
 
-    public mutating func process(server: ServerConfig, outcome: PollOutcome, now: Date) -> [AlertEvent] {
+    /// `extra`: conditions the poller sees across polls, such as stale data.
+    public mutating func process(server: ServerConfig, outcome: PollOutcome, extra: [Condition] = [],
+                                 now: Date) -> [AlertEvent] {
         let reachable: Bool
         if case .snapshot = outcome { reachable = true } else { reachable = false }
         let active = Set((states[server.id] ?? [:]).filter { $0.value.firedAt != nil }.keys)
         return process(id: server.id, name: server.name,
-                       conditions: Rules.conditions(outcome, thresholds: server.thresholds, active: active, now: now),
+                       conditions: Rules.conditions(outcome, thresholds: server.thresholds, active: active, now: now)
+                           + extra,
                        reachable: reachable, now: now)
     }
 

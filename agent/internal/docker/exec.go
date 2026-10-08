@@ -80,7 +80,7 @@ func (c *Client) post(path string, body any) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.http.Post("http://docker"+path, "application/json", bytes.NewReader(b))
+	resp, err := c.do(http.MethodPost, path, bytes.NewReader(b))
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func (c *Client) postJSON(path string, body, out any) error {
 }
 
 func (c *Client) getJSON(path string, out any) error {
-	resp, err := c.http.Get("http://docker" + path)
+	resp, err := c.do(http.MethodGet, path, nil)
 	if err != nil {
 		return err
 	}

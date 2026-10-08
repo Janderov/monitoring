@@ -2,9 +2,11 @@
 import MonitorCore
 import SwiftUI
 
-/// Reinstalls the agent on every server in one go, one after another, with
-/// the version bundled in this app. Token and certificate stay the same
-/// (the installer keeps them on an upgrade), so polling goes on as before.
+/// Updates the agent on the servers that need it, one after another, with the
+/// version bundled in this app. The first server goes alone: only if it comes
+/// back fine do the others follow, and the first error stops the rest. On the
+/// server, an agent that does not start is put back to the previous version
+/// by install.sh. Token and certificate stay the same, so polling goes on.
 /// A server whose saved SSH password is missing or wrong asks for it in its
 /// own row and can be retried alone.
 struct UpdateAgentsSheet: View {
@@ -16,11 +18,14 @@ struct UpdateAgentsSheet: View {
         case running(String)
         case done(String)
         case failed(String)
+        /// Left alone because an earlier server failed.
+        case held
     }
 
     @State private var states: [String: RowState] = [:]
     @State private var passwords: [String: String] = [:]
     @State private var running = false
+    @State private var stopped: String?
 
     private var servers: [ServerConfig] {
         model.statuses.map(\.server).filter { model.can(.installAgent, $0) }
@@ -30,8 +35,11 @@ struct UpdateAgentsSheet: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Обновить агентов").font(.headline)
-                Text("Агент на каждом сервере переустановится по SSH версией из этого приложения. Токен и сертификат не меняются.")
+                Text("Сначала обновится один сервер, и только если он вернулся в строй, остальные по очереди. При первой ошибке обновление остановится. Агент, который не запустился, сам вернётся на прежнюю версию. Токен и сертификат не меняются.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let bundled = AgentBundle.version {
+                    Text("Версия в приложении: \(bundled)").font(.caption).foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
@@ -40,6 +48,10 @@ struct UpdateAgentsSheet: View {
                 .listStyle(.inset)
                 .frame(minHeight: CGFloat(max(servers.count, 2)) * 44)
             Divider()
+            if let stopped {
+                Label(stopped, systemImage: "pause.circle").foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.top, 10)
+            }
             HStack {
                 if running { ProgressView().controlSize(.small) }
                 Spacer()
@@ -47,7 +59,7 @@ struct UpdateAgentsSheet: View {
                     .keyboardShortcut(allDone ? .defaultAction : .cancelAction)
                     .disabled(running)
                 if !allDone {
-                    Button(states.isEmpty ? "Обновить всех" : "Повторить с ошибкой") { start(failedOnly: !states.isEmpty) }
+                    Button(started ? "Продолжить" : "Обновить") { start() }
                         .keyboardShortcut(.defaultAction)
                         .disabled(running || servers.isEmpty)
                 }
@@ -55,6 +67,24 @@ struct UpdateAgentsSheet: View {
             .padding(16)
         }
         .frame(width: 520)
+        .onAppear {
+            for s in servers where !needsUpdate(s) { states[s.id] = .done("актуален") }
+        }
+    }
+
+    /// Outdated, or not answering (its agent may be the problem).
+    private func needsUpdate(_ s: ServerConfig) -> Bool {
+        guard let snap = model.status(s.id)?.snapshot, model.status(s.id)?.error == nil else { return true }
+        return AgentBundle.outdated(snap)
+    }
+
+    private var started: Bool {
+        states.values.contains { if case .done = $0 { return false } else { return $0 != .waiting } }
+    }
+
+    private func current(_ s: ServerConfig) -> String? {
+        guard let snap = model.status(s.id)?.snapshot else { return nil }
+        return snap.agentVersion ?? "старая версия"
     }
 
     private var allDone: Bool {
@@ -68,7 +98,7 @@ struct UpdateAgentsSheet: View {
                 icon(state).frame(width: 16)
                 Text(s.name).lineLimit(1)
                 Spacer(minLength: 8)
-                Text(label(state)).font(.callout).foregroundStyle(color(state)).lineLimit(1)
+                Text(label(state, s)).font(.callout).foregroundStyle(color(state)).lineLimit(1)
             }
             if case .failed(let why) = state {
                 Text(why).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -92,12 +122,14 @@ struct UpdateAgentsSheet: View {
         case .running: ProgressView().controlSize(.mini)
         case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        case .held: Image(systemName: "pause.circle").foregroundStyle(.tertiary)
         }
     }
 
-    private func label(_ s: RowState) -> String {
+    private func label(_ s: RowState, _ server: ServerConfig) -> String {
         switch s {
-        case .waiting: return "ожидает"
+        case .held: return "не тронут"
+        case .waiting: return current(server).map { "\($0) → новая" } ?? "ожидает"
         case .running(let step): return step
         case .done(let v): return v
         case .failed: return "не удалось"
@@ -109,14 +141,28 @@ struct UpdateAgentsSheet: View {
         return .secondary
     }
 
-    private func start(failedOnly: Bool) {
+    /// The servers still to do, the first one alone: the rest wait until it
+    /// is back, and stop at the first error.
+    private func start() {
         let list = servers.filter { s in
-            guard failedOnly else { return true }
-            if case .failed = states[s.id] { return true } else { return false }
+            switch states[s.id] ?? .waiting {
+            case .done: return false
+            default: return true
+            }
         }
+        stopped = nil
         Task {
             running = true
-            for s in list { await run(s, alone: false) }
+            for (i, s) in list.enumerated() {
+                await run(s, alone: false)
+                if case .failed = states[s.id] {
+                    for rest in list.dropFirst(i + 1) { states[rest.id] = .held }
+                    stopped = i == 0 && list.count > 1
+                        ? "Первый сервер не обновился, остальные не тронуты."
+                        : list.count > i + 1 ? "Остановлено на ошибке, остальные не тронуты." : nil
+                    break
+                }
+            }
             running = false
         }
     }

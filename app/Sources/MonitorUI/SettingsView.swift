@@ -137,6 +137,7 @@ private struct UpdateSettings: View {
     @ObservedObject var updates: UpdateModel
     @State private var token = ""
     @State private var error: String?
+    @State private var confirmRollback = false
 
     var body: some View {
         Form {
@@ -144,7 +145,7 @@ private struct UpdateSettings: View {
                 LabeledContent("Сборка", value: AppUpdater.currentVersion)
                 HStack {
                     Button("Проверить обновления") { Task { await updates.check() } }
-                        .disabled(!updates.hasToken || updates.busy)
+                        .disabled(updates.busy)
                     if updates.busy { ProgressView().controlSize(.small) }
                     Spacer()
                     if updates.available != nil {
@@ -158,6 +159,38 @@ private struct UpdateSettings: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            if let previous = updates.previousVersion {
+                Section {
+                    LabeledContent("Предыдущая сборка") {
+                        HStack {
+                            Text(previous).foregroundStyle(.secondary)
+                            Button("Вернуть") { confirmRollback = true }
+                        }
+                    }
+                } footer: {
+                    Text("Если новая сборка работает хуже, можно вернуть ту, что стояла до обновления.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                .confirmationDialog("Вернуть сборку \(previous)?", isPresented: $confirmRollback) {
+                    Button("Вернуть и перезапустить") { Task { await updates.rollback() } }
+                } message: {
+                    Text(updates.previousIsOlder
+                         ? "База вернётся к состоянию на момент обновления. Графики за это время дорисуются из памяти агентов (24 часа)."
+                         : "Приложение перезапустится в этой сборке, данные сохранятся.")
+                }
+            }
+            if let expiry = updates.signingExpiry {
+                Section {
+                    LabeledContent("Подпись действует до") {
+                        Text(expiry.formatted(date: .long, time: .omitted))
+                            .foregroundStyle(updates.signingExpiresSoon ? .orange : .secondary)
+                    }
+                    if updates.signingExpiresSoon {
+                        Text("Сертификат Apple скоро истечёт, после этого новые сборки не установятся. Выпустите новый по инструкции docs/signing.md.")
+                            .foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
             Section {
                 HStack {
                     SecureField("Токен GitHub", text: $token,
@@ -167,7 +200,7 @@ private struct UpdateSettings: View {
                 }
                 if let error { Text(error).foregroundStyle(.red) }
             } footer: {
-                Text("Fine-grained токен только для репозитория monitoring, права Actions и Contents только на чтение. Как его сделать, написано в README.")
+                Text("Не обязателен: новые сборки скачиваются из выпусков на GitHub без токена. Нужен только для сборок, сделанных до появления выпусков (fine-grained токен, Actions и Contents только на чтение).")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }

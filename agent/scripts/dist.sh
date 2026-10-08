@@ -7,7 +7,11 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-VERSION="${1:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+# By default the date and commit of the last change to the agent itself, so
+# the version (and the app's "agent outdated" mark) changes only when the
+# agent does, not with every app build.
+VERSION="${1:-$(git log -1 --format=%cd-%h --date=format:%Y%m%d -- . 2>/dev/null)}"
+VERSION="${VERSION:-dev}"
 OUT=dist
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -18,6 +22,7 @@ for arch in amd64 arm64; do
     -o "$OUT/monitor-agent-linux-$arch" ./cmd/monitor-agent
 done
 cp deploy/install.sh deploy/monitor-agent.service deploy/monitor-agent-flows.service "$OUT/"
+echo "$VERSION" > "$OUT/VERSION"
 
 # sha256sum on Linux, shasum on macOS; both print "<hash>  <file>".
 if command -v sha256sum >/dev/null; then sum=(sha256sum); else sum=(shasum -a 256); fi

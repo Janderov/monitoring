@@ -27,10 +27,31 @@ enum Background {
                 await model.pollNow()
             }
         }
+        Task { @MainActor in
+            while true {
+                remindCertificate(model)
+                try? await Task.sleep(nanoseconds: 6 * 3600 * 1_000_000_000)
+            }
+        }
         if !UserDefaults.standard.bool(forKey: launchSetKey), Bundle.main.bundleURL.path.hasPrefix("/Applications/") {
             UserDefaults.standard.set(true, forKey: launchSetKey)
             setLaunchAtLogin(true)
         }
+    }
+
+    /// Once a day while the signing certificate has under 30 days left:
+    /// after it expires, CI builds can no longer be installed as updates.
+    static func remindCertificate(_ model: AppModel) {
+        guard model.updates.signingExpiresSoon, let expiry = model.updates.signingExpiry else { return }
+        let key = "certificate.remindedDay"
+        let today = Calendar.current.startOfDay(for: Date()).timeIntervalSince1970
+        guard UserDefaults.standard.double(forKey: key) != today else { return }
+        UserDefaults.standard.set(today, forKey: key)
+        let left = max(Int(expiry.timeIntervalSinceNow / 86400), 0)
+        model.notifyDirect?([AlertEvent(serverID: "app", serverName: "Сертификат подписи", key: "certificate", kind: .info,
+                                        severity: .warning,
+                                        message: "истекает через \(left) дн. Выпустите новый по инструкции docs/signing.md, иначе обновления остановятся",
+                                        time: Date())])
     }
 
     static var launchAtLogin: Bool { SMAppService.mainApp.status == .enabled }

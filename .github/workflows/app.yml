@@ -34,11 +34,15 @@ jobs:
   # The menu bar app itself only builds on macOS.
   macos-app:
     runs-on: macos-14
+    permissions:
+      contents: write  # only for publishing builds of main as releases
     defaults:
       run:
         working-directory: app
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the agent's version is the date and commit of its last change
       - run: swift --version
       # The core tests run on Linux above; here only the macOS-only build.
       # The app installs the agent over SSH, so it ships the Linux binaries.
@@ -48,11 +52,8 @@ jobs:
           cache: false
       - name: build agent bundle
         working-directory: agent
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then v="$GITHUB_REF_NAME"; else v="dev-${HEAD_SHA::7}"; fi
-          scripts/dist.sh "$v"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then scripts/dist.sh "$GITHUB_REF_NAME"; else scripts/dist.sh; fi
       # With a stable Team ID in the signature, Keychain keeps trusting the
       # app across updates (docs/signing.md). Without the secrets (not set
       # up yet, or a fork's PR) the app is signed ad hoc as before.
@@ -83,10 +84,24 @@ jobs:
           REQUIRE_AGENT: "1"
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then v="$GITHUB_REF_NAME"; else v="dev-${HEAD_SHA::7}"; fi
+          # 1.<build number>-dev-<commit>: the number for people, the commit
+          # for the updater (AppUpdater.commit(fromVersion:)).
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then v="$GITHUB_REF_NAME"; else v="1.${GITHUB_RUN_NUMBER}-dev-${HEAD_SHA::7}"; fi
           scripts/build-app.sh "$v"
           cd dist && ditto -c -k --keepParent Monitor.app Monitor.zip
       - uses: actions/upload-artifact@v4
         with:
           name: Monitor-app
           path: app/dist/Monitor.zip
+      # Every build of main becomes a release: unlike artifacts, releases are
+      # not deleted after 90 days, and the app updates from them.
+      - name: publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          subject="$(git log -1 --format=%s)"
+          # A merge commit names the PR; its title is the first line of the body.
+          if [[ "$subject" == "Merge pull request"* ]]; then subject="$(git log -1 --format=%b | sed -n '1p')"; fi
+          gh release create "build-${GITHUB_RUN_NUMBER}" dist/Monitor.zip --target "$GITHUB_SHA" \
+            --title "Сборка ${GITHUB_RUN_NUMBER}: ${subject}" --notes "${subject}"

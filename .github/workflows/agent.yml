@@ -23,6 +23,8 @@ jobs:
         working-directory: agent
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # dist.sh names the version after the agent's last commit
       - uses: actions/setup-go@v5
         with:
           go-version-file: agent/go.mod
@@ -31,13 +33,11 @@ jobs:
       - run: go vet ./...
       - run: GOOS=darwin go vet ./...
       - run: go test -race ./...
-      # Tags give release versions (v1.2.0); everything else is dev-<commit>.
+      # Tags give release versions (v1.2.0); everything else is the date and
+      # commit of the agent's last change.
       - name: build install bundle
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then v="$GITHUB_REF_NAME"; else v="dev-${HEAD_SHA::7}"; fi
-          scripts/dist.sh "$v"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then scripts/dist.sh "$GITHUB_REF_NAME"; else scripts/dist.sh; fi
       - uses: actions/upload-artifact@v4
         with:
           name: monitor-agent-dist
