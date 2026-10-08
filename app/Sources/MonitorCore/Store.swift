@@ -230,6 +230,12 @@ public actor Store {
                  .text(e.kind.rawValue), .int(Int64(e.severity.rawValue)), .text(e.message), .text(actor))
     }
 
+    /// How many events with this key the server logged since `since`.
+    public func eventCount(_ serverID: String, key: String, since: Date) throws -> Int {
+        Int(try db.prepare("SELECT COUNT(*) FROM events WHERE server_id = ? AND key = ? AND ts >= ?")
+            .rows(.text(serverID), .text(key), .int(Int64(since.timeIntervalSince1970))).first?.int(0) ?? 0)
+    }
+
     /// Recomputes the hourly rows for every hour touched since `since`
     /// (re-running is harmless), then drops data past retention.
     public func rollup(since: Date, now: Date) throws {

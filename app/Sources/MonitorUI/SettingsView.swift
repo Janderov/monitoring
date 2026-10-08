@@ -75,10 +75,22 @@ private struct GeneralSettings: View {
                     }
                 }
                 LabeledContent("Хранение", value: "поминутно \(Int(Store.sampleRetention / 86400)) дн., по часам \(Int(Store.hourlyRetention / 86400)) дн.")
+                LabeledContent("Размер базы", value: databaseSize)
+                Text("Агенты помнят последние \(Int(Poller.firstBackfill / 3600)) ч, поэтому графики дополняются, когда Мак был выключен или спал.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
         .frame(minHeight: 360)
+    }
+
+    /// The database with its write-ahead log, which holds the newest pages.
+    private var databaseSize: String {
+        let path = DataFolder.database.path
+        let bytes = [path, path + "-wal"].reduce(UInt64(0)) { sum, p in
+            sum + ((try? FileManager.default.attributesOfItem(atPath: p)[.size] as? UInt64) ?? 0)
+        }
+        return bytes == 0 ? "—" : Fmt.bytes(bytes)
     }
 }
 

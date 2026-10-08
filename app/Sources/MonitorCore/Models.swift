@@ -75,6 +75,11 @@ public struct Snapshot: Codable, Equatable, Sendable {
         public var state: String
         public var status: String
         public var health: String?
+        /// Usage of a running container (agents since container usage):
+        /// CPU in percent of one core, memory without page cache.
+        public var cpuPercent: Double?
+        public var memBytes: UInt64?
+        public var memLimitBytes: UInt64?
     }
 
     public struct Process: Codable, Equatable, Sendable {

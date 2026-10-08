@@ -94,6 +94,15 @@ type Container struct {
 	// Health is the Docker healthcheck result: "healthy", "unhealthy",
 	// "starting", or empty when the container has no healthcheck.
 	Health string `json:"health,omitempty"`
+	// Usage of a running container, read from its cgroup: CPU in percent
+	// of one core (like top, can exceed 100) and memory without page cache,
+	// as `docker stats` shows them. Absent when the cgroup is unreadable;
+	// CPU also on the first sample, which has nothing to compare with.
+	CPUPercent    *float64 `json:"cpu_percent,omitempty"`
+	MemBytes      *uint64  `json:"mem_bytes,omitempty"`
+	MemLimitBytes *uint64  `json:"mem_limit_bytes,omitempty"`
+	// FullID finds the container's cgroup; the API shows the short ID.
+	FullID string `json:"-"`
 }
 
 // ContainerLister is implemented by the docker package; nil disables it.
@@ -105,16 +114,20 @@ type ContainerLister interface {
 type Collector struct {
 	procRoot string
 	docker   ContainerLister
+	// CgroupRoot is where container usage is read; empty turns it off.
+	CgroupRoot string
 
 	mu        sync.Mutex
 	prevCPU   cpuTimes
 	prevNet   Network
 	prevTime  time.Time
 	prevProcs map[int]procTicks
+	// prevCtr: CPU time used by each container so far, by full ID.
+	prevCtr map[string]time.Duration
 }
 
 func New(procRoot string, docker ContainerLister) *Collector {
-	return &Collector{procRoot: procRoot, docker: docker}
+	return &Collector{procRoot: procRoot, docker: docker, CgroupRoot: "/sys/fs/cgroup"}
 }
 
 // Sample takes one snapshot. Individual probe failures are recorded in
@@ -179,12 +192,14 @@ func (c *Collector) Sample(now time.Time) Snapshot {
 		}
 		c.prevProcs = cur
 	}
+	prevTime := c.prevTime
 	c.prevTime = now
 
 	if c.docker != nil {
 		if cs, err := c.docker.List(); err != nil {
 			fail("docker", err)
 		} else {
+			c.containerUsage(cs, now.Sub(prevTime), !prevTime.IsZero())
 			s.Containers = cs
 		}
 	}
