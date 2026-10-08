@@ -294,6 +294,21 @@ public struct AppUpdater: Sendable {
         try p.run()
     }
 
+    /// Opens the app again once this process has quit (after an import).
+    public static func scheduleRelaunch(app: URL = Bundle.main.bundleURL) throws {
+        let script = """
+            pid="$1"; app="$2"
+            i=0; while kill -0 "$pid" 2>/dev/null && [ $i -lt 150 ]; do sleep 0.2; i=$((i+1)); done
+            open "$app"
+            """
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", script, "relaunch", String(ProcessInfo.processInfo.processIdentifier), app.path]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+    }
+
     /// When the certificate this build is signed with runs out; nil for an
     /// ad hoc signature.
     public static func signingExpiry(of bundle: URL = Bundle.main.bundleURL) -> Date? {

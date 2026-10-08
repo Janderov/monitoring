@@ -48,19 +48,15 @@ func (c *Client) VPN(containers []collect.Container, now time.Time) []collect.VP
 
 func (c *Client) fillWireGuard(v *collect.VPN, now time.Time) {
 	// The AmneziaWG image ships `awg`; older images and plain WireGuard ship `wg`.
-	dump, err := c.Exec(v.Container, "sh", "-c", "awg show all dump 2>/dev/null || wg show all dump")
+	dump, err := c.Exec(v.Container, "sh", "-c", inContainerTimeout+"$T awg show all dump 2>/dev/null || $T wg show all dump")
 	if err != nil {
 		v.Error = "wg show: " + err.Error()
 		return
 	}
 	peers := parseWGDump(string(dump), now)
-
-	// Client names live in the AmneziaVPN app's clientsTable; missing is fine.
-	if table, err := c.Exec(v.Container, "sh", "-c", "cat /opt/amnezia/*/clientsTable 2>/dev/null || true"); err == nil {
-		names := parseClientsTable(table)
-		for i := range peers {
-			peers[i].Name = names[peers[i].PublicKey]
-		}
+	names := c.clientNames(v.Container, now)
+	for i := range peers {
+		peers[i].Name = names[peers[i].PublicKey]
 	}
 
 	v.Peers = peers
@@ -73,6 +69,38 @@ func (c *Client) fillWireGuard(v *collect.VPN, now time.Time) {
 		v.RxBytes += p.RxBytes
 		v.TxBytes += p.TxBytes
 	}
+}
+
+// namesEvery: client names change only when a key is made or removed, so
+// the clientsTable is read once per 5 minutes, not every sample.
+const namesEvery = 5 * time.Minute
+
+type clientNames struct {
+	at    time.Time
+	names map[string]string
+}
+
+// clientNames maps public keys to the names in the AmneziaVPN app's
+// clientsTable; missing is fine. A failed read keeps the previous names.
+func (c *Client) clientNames(container string, now time.Time) map[string]string {
+	c.mu.Lock()
+	cached, ok := c.names[container]
+	c.mu.Unlock()
+	if ok && now.Sub(cached.at) < namesEvery {
+		return cached.names
+	}
+	table, err := c.Exec(container, "sh", "-c", "cat /opt/amnezia/*/clientsTable 2>/dev/null || true")
+	if err != nil {
+		return cached.names
+	}
+	cached = clientNames{at: now, names: parseClientsTable(table)}
+	c.mu.Lock()
+	if c.names == nil {
+		c.names = map[string]clientNames{}
+	}
+	c.names[container] = cached
+	c.mu.Unlock()
+	return cached.names
 }
 
 // parseWGDump parses `wg show all dump`. Interface lines have 5 fields, peer

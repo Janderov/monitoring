@@ -11,9 +11,14 @@ Group=monitor-agent
 ExecStart=/usr/local/bin/monitor-agent run -config /etc/monitor-agent/config.json
 Restart=always
 RestartSec=5
-# /var/lib/monitor-agent: the list of sites and servers to probe, set from the Mac.
+# /var/lib/monitor-agent: the list of sites and servers to probe, set from the
+# Mac, and the last day of samples (history.jsonl), kept across restarts.
 StateDirectory=monitor-agent
 StateDirectoryMode=0700
+# A bug or a flood of checks must not starve the server it watches.
+MemoryHigh=200M
+MemoryMax=300M
+CPUQuota=50%
 
 # The agent only reads system state; lock everything else down.
 NoNewPrivileges=yes

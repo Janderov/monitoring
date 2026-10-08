@@ -77,6 +77,27 @@ func TestParseSSH(t *testing.T) {
 	}
 }
 
+func TestReadSSHAcrossRotation(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	auth := dir + "/auth.log"
+	// The weekly rotation happened an hour ago: most of the day is in auth.log.1.
+	os.WriteFile(auth+".1", []byte(
+		"2026-10-07T20:00:00+00:00 nl sshd[1]: Invalid user a from 198.51.100.7 port 1\n"+
+			"2026-10-08T10:00:00+00:00 nl sshd[2]: Invalid user b from 198.51.100.7 port 2"), 0o600)
+	os.WriteFile(auth, []byte("2026-10-08T11:30:00+00:00 nl sshd[3]: Invalid user c from 203.0.113.9 port 3\n"), 0o600)
+	l, err := ReadSSH([]string{dir + "/secure", auth}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Failed24h != 3 || l.Source != auth {
+		t.Fatalf("failed = %d from %s, want 3 from auth.log", l.Failed24h, l.Source)
+	}
+	if _, err := ReadSSH([]string{dir + "/none"}, now); err == nil {
+		t.Error("no log should be an error")
+	}
+}
+
 func TestLogTimeYearRollover(t *testing.T) {
 	now := time.Date(2027, 1, 1, 0, 30, 0, 0, time.UTC)
 	got, ok := logTime("Dec 31 23:59:00 host sshd[1]: x", now)

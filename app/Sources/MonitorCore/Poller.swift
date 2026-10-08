@@ -17,6 +17,8 @@ public struct ServerStatus: Equatable, Identifiable, Sendable {
     public var lastSeen: Date?
     /// Error of the last poll, nil when it succeeded.
     public var error: String?
+    /// The agent answers but refused the list of sites and servers to check.
+    public var checksError: String?
     public var alerts: [ActiveAlert]
 
     public var level: Level {
@@ -282,12 +284,38 @@ public actor Poller {
         return list
     }
 
-    /// What one agent probes: the sites it checks, and every other server's
-    /// agent port, so the map shows who reaches whom.
-    static func targets(for s: ServerConfig, servers: [ServerConfig], sites: [SiteConfig]) -> [CheckTarget] {
+    /// How many other servers one agent checks: every one in a small setup,
+    /// a few neighbours in a big one, so checks grow with the servers, not
+    /// with their square.
+    public static let maxPeers = 5
+
+    /// What one agent probes: the sites it checks, and other servers' agent
+    /// ports, so the map shows who reaches whom.
+    static func targets(for s: ServerConfig, servers: [ServerConfig], sites: [SiteConfig],
+                        talksTo: Set<String> = []) -> [CheckTarget] {
         sites.filter { $0.checked(from: s) }.map { CheckTarget.http($0.checkID, url: $0.url, auth: $0.basicAuth) }
-            + servers.filter { $0.id != s.id && $0.host != s.host }
+            + peers(of: s, servers: servers, talksTo: talksTo)
                 .map { CheckTarget.tcp($0.peerCheckID, host: $0.host, port: $0.port) }
+    }
+
+    /// Up to `maxPeers` other servers: the ones it has connections to (a VPN
+    /// chain), then its neighbours on both sides in the server list, so every
+    /// server is also checked by a few others. The list keeps the config's
+    /// order, so it changes only when the servers do.
+    static func peers(of s: ServerConfig, servers: [ServerConfig], talksTo: Set<String> = []) -> [ServerConfig] {
+        let others = servers.filter { $0.id != s.id && $0.host != s.host }
+        guard others.count > maxPeers, let me = servers.firstIndex(where: { $0.id == s.id }) else { return others }
+        var chosen = Set(others.filter { talksTo.contains($0.host) }.prefix(maxPeers - 2).map(\.id))
+        let n = servers.count
+        var step = 1
+        while chosen.count < maxPeers, step < n {
+            for i in [me + step, me - step] {
+                let peer = servers[((i % n) + n) % n]
+                if chosen.count < maxPeers, peer.id != s.id, peer.host != s.host { chosen.insert(peer.id) }
+            }
+            step += 1
+        }
+        return others.filter { chosen.contains($0.id) }
     }
 
     /// One round over all servers, in parallel. Rounds never overlap: a call
@@ -321,7 +349,8 @@ public actor Poller {
         let list = servers
         let wantInterval = Int(refresh)
         let wanted = Dictionary(uniqueKeysWithValues: list.map { s in
-            (s.id, Poller.targets(for: s, servers: list, sites: sites))
+            (s.id, Poller.targets(for: s, servers: list, sites: sites,
+                                  talksTo: Set((statuses[s.id]?.snapshot?.links ?? []).map(\.remoteIp))))
         })
         let results = await withTaskGroup(of: (ServerConfig, PollResult).self) { group in
             for s in list {
@@ -329,9 +358,16 @@ public actor Poller {
                 // would reach the agent without it; keep the agent's list.
                 let held = sites.contains { $0.authLocked && $0.checked(from: s) }
                 let push = held || pushedTargets[s.id] == wanted[s.id] ? nil : wanted[s.id]
+                // A server that has been answering gets 20 s, so one slow
+                // server does not hold up the round; catching up on hours
+                // of history after a pause may take longer.
+                let fresh = statuses[s.id]?.lastSeen.map { now.timeIntervalSince($0) < 600 } ?? false
+                let limit = fresh ? Poller.pollDeadline : Poller.backfillDeadline
                 group.addTask { [client, store] in
-                    (s, await Poller.poll(s, client: client, store: store, push: push,
-                                          interval: wantInterval, now: now))
+                    let r = await Poller.within(limit) {
+                        await Poller.poll(s, client: client, store: store, push: push, interval: wantInterval, now: now)
+                    }
+                    return (s, r ?? PollResult(snapshot: nil, error: "сервер не ответил за \(Int(limit)) с"))
                 }
             }
             var out: [(ServerConfig, PollResult)] = []
@@ -381,6 +417,7 @@ public actor Poller {
                 st.lastSeen = now
             }
             st.error = r.error
+            st.checksError = r.pushError
             statuses[s.id] = st
             track(s.id, now: now)
         }
@@ -488,8 +525,9 @@ public actor Poller {
         var offline = false
         /// Oldest sample stored by this poll.
         var oldestNew: Date?
-        /// Check targets the agent accepted in this poll.
+        /// Check targets the agent accepted in this poll, or why it refused them.
         var pushed: [CheckTarget]?
+        var pushError: String?
         /// The agent answered, but saving its data failed.
         var storeError: String?
         /// The last snapshot stored before this poll, and the ones it brought.
@@ -504,18 +542,23 @@ public actor Poller {
         let history: [Snapshot]
         let snap: Snapshot
         var pushed: [CheckTarget]?
+        var pushError: String?
         do {
             let since = (try? await store.lastSampleTime(s.id)) ?? now.addingTimeInterval(-firstBackfill)
             history = try await client.history(s, since: since)
             // A failed push is retried next round; it must not hide the server's metrics.
             if let push {
-                if (try? await client.setChecks(s, targets: push)) != nil {
+                do {
+                    try await client.setChecks(s, targets: push)
                     pushed = push
-                } else if push.contains(where: { $0.basicAuth != nil }) {
-                    // Agents before site logins reject the whole list; check
-                    // those sites without the login until the agent is updated.
-                    let plain = push.map { var t = $0; t.basicAuth = nil; return t }
-                    if (try? await client.setChecks(s, targets: plain)) != nil { pushed = plain }
+                } catch {
+                    pushError = describe(error)
+                    if push.contains(where: { $0.basicAuth != nil }) {
+                        // Agents before site logins reject the whole list; check
+                        // those sites without the login until the agent is updated.
+                        let plain = push.map { var t = $0; t.basicAuth = nil; return t }
+                        if (try? await client.setChecks(s, targets: plain)) != nil { pushed = plain; pushError = nil }
+                    }
                 }
             }
             snap = try await client.snapshot(s)
@@ -551,7 +594,26 @@ public actor Poller {
         // The snapshot is usually the newest history sample again.
         let samples = history.last.map { $0.time >= snap.time } == true ? history : history + [snap]
         return PollResult(snapshot: snap, error: nil, oldestNew: history.first?.time, pushed: pushed,
-                          storeError: storeError, before: previous, samples: samples)
+                          pushError: pushError, storeError: storeError, before: previous, samples: samples)
+    }
+
+    /// How long one server's poll may take in a round.
+    public static let pollDeadline: TimeInterval = 20
+    public static let backfillDeadline: TimeInterval = 90
+
+    /// The result of `op`, or nil once `seconds` pass without one. `op` is
+    /// then cancelled, but the round does not wait for it to wind down: a
+    /// request stuck in the network must not hold up the other servers.
+    static func within<T: Sendable>(_ seconds: TimeInterval,
+                                    _ op: @escaping @Sendable () async -> T) async -> T? {
+        let gate = ResumeOnce<T?>()
+        return await withCheckedContinuation { cont in
+            let work = Task { gate.resume(cont, with: await op()) }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if gate.resume(cont, with: nil) { work.cancel() }
+            }
+        }
     }
 
     static func describe(_ error: Error) -> String {
@@ -589,5 +651,21 @@ extension SiteStatus {
 extension ServerStatus {
     public init(server: ServerConfig, alerts: [ActiveAlert]) {
         self.init(server: server, snapshot: nil, lastSeen: nil, error: nil, alerts: alerts)
+    }
+}
+
+/// Resumes a continuation with whichever result comes first.
+final class ResumeOnce<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+
+    @discardableResult
+    func resume(_ cont: CheckedContinuation<T, Never>, with value: T) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !done else { return false }
+        done = true
+        cont.resume(returning: value)
+        return true
     }
 }

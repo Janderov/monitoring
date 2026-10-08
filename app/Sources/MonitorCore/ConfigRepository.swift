@@ -22,10 +22,24 @@ public actor ConfigRepository {
         return file
     }
 
+    /// What can be monitored: entries that cannot be read or are invalid
+    /// are left out, each with the reason, and the others are watched.
+    public func loadSkipping() throws -> (file: ServersFile, problems: [String]) {
+        let (decoded, problems) = try ServersFile.decodeSkipping(Data(contentsOf: url))
+        // A broken entry stays in the file for the edit screens to fix.
+        let file = try withSecrets(decoded, rewrite: false)
+        let (usable, invalid) = file.usable()
+        return (usable, problems + invalid)
+    }
+
     /// Like `load` without validation, so a broken entry can still be
     /// replaced or deleted.
     private func read() throws -> ServersFile {
-        var file = try ServersFile.decode(Data(contentsOf: url))
+        try withSecrets(ServersFile.decode(Data(contentsOf: url)))
+    }
+
+    private func withSecrets(_ decoded: ServersFile, rewrite: Bool = true) throws -> ServersFile {
+        var file = decoded
         var moved = false
         for i in file.servers.indices {
             let key = SecretKey.agentToken(file.servers[i].id)
@@ -36,7 +50,7 @@ public actor ConfigRepository {
                 moved = true
             }
         }
-        if moved { try write(file) }
+        if moved && rewrite { try write(file) }
         if var sites = file.sites {
             for i in sites.indices where sites[i].authUser != nil {
                 do {
@@ -112,6 +126,11 @@ public actor ConfigRepository {
 
     /// Writes the file without tokens: temp file (owner-only) then rename, so
     /// a crash never leaves half a file.
+    var secretStore: SecretStore { secrets }
+
+    /// Writes the whole file as given (an import).
+    func replace(with file: ServersFile) throws { try write(file) }
+
     private func write(_ file: ServersFile) throws {
         var stripped = file
         for i in stripped.servers.indices { stripped.servers[i].token = "" }

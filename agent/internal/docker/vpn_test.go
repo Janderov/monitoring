@@ -82,6 +82,9 @@ func TestDemux(t *testing.T) {
 	}
 }
 
+// ran lists the commands the last fakeDocker was asked to run.
+var ran []string
+
 // fakeDocker answers the exec API: each command's stdout is looked up by a
 // substring of the command line.
 func fakeDocker(t *testing.T, outputs map[string]string) string {
@@ -93,6 +96,7 @@ func fakeDocker(t *testing.T, outputs map[string]string) string {
 	}
 	var mu sync.Mutex
 	cmds := map[string]string{}
+	ran = nil
 	n := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /containers/{name}/exec", func(w http.ResponseWriter, r *http.Request) {
@@ -102,6 +106,7 @@ func fakeDocker(t *testing.T, outputs map[string]string) string {
 		n++
 		id := string(rune('a' + n))
 		cmds[id] = strings.Join(body.Cmd, " ")
+		ran = append(ran, cmds[id])
 		mu.Unlock()
 		json.NewEncoder(w).Encode(map[string]string{"Id": id})
 	})
@@ -146,5 +151,32 @@ func TestVPNEndToEnd(t *testing.T) {
 	}
 	if got[1].Running || got[1].Protocol != "xray" || got[1].ClientsKnown {
 		t.Errorf("xray = %+v", got[1])
+	}
+}
+
+func TestClientNamesReadEveryFewMinutes(t *testing.T) {
+	sock := fakeDocker(t, map[string]string{
+		"wg show":      wgDump,
+		"clientsTable": `[{"clientId":"PUB_A","userData":{"clientName":"iPhone"}}]`,
+	})
+	c := New(sock)
+	cts := []collect.Container{{Name: "amnezia-awg", State: "running"}}
+	for _, m := range []int{0, 1, 2, 6} {
+		got := c.VPN(cts, now.Add(time.Duration(m)*time.Minute))
+		if got[0].Peers[0].Name != "iPhone" {
+			t.Fatalf("minute %d: name = %q", m, got[0].Peers[0].Name)
+		}
+	}
+	tables, dumps := 0, 0
+	for _, cmd := range ran {
+		if strings.Contains(cmd, "clientsTable") {
+			tables++
+		}
+		if strings.Contains(cmd, "timeout 10") && strings.Contains(cmd, "wg show") {
+			dumps++
+		}
+	}
+	if tables != 2 || dumps != 4 {
+		t.Errorf("clientsTable read %d times, wg show with timeout %d times; want 2 and 4", tables, dumps)
 	}
 }

@@ -13,10 +13,17 @@ public protocol MonitorBackend: AnyObject, Sendable {
                onSites: @escaping @Sendable ([SiteStatus]) -> Void,
                onHealth: @escaping @Sendable (PollerHealth) -> Void) async throws
     /// Re-reads the server list and polls right away.
-    func reload() async throws
+    /// Re-reads servers.json; returns the entries left out, each with the reason.
+    @discardableResult
+    func reload() async throws -> [String]
     func pollNow() async
     /// A copy of the database, made before an update.
     func copyDatabase(to url: URL) async throws
+    /// Everything needed on another Mac, encrypted with `password`.
+    func exportTransfer(password: String) async throws -> Data
+    /// Takes servers, sites and secrets from a transfer file at once; its
+    /// history replaces this Mac's on the next start of the app.
+    func importTransfer(_ data: Data, password: String) async throws -> ServersFile
     /// How often the screens refresh and the agents sample (Poller.refreshChoices).
     func setRefreshInterval(_ seconds: TimeInterval) async
     func samples(_ serverID: String, from: Date, to: Date) async throws -> [Store.Sample]
@@ -102,6 +109,8 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
                       onSites: @escaping @Sendable ([SiteStatus]) -> Void,
                       onHealth: @escaping @Sendable (PollerHealth) -> Void) async throws {
         try DataFolder.prepare()
+        try Transfer.applyPendingDatabase(pending: DataFolder.pendingImport, database: DataFolder.database,
+                                          keep: DataFolder.beforeImport)
         let store = try Store(path: DataFolder.database.path)
         let poller = Poller(client: AgentClient(transport: PinnedTransport()), store: store,
                             onUpdate: onUpdate, onEvents: notify)
@@ -119,11 +128,14 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
         await poller.start()
     }
 
-    public func reload() async throws {
-        guard let poller else { return }
-        let file = try await config.load()
+    @discardableResult
+    public func reload() async throws -> [String] {
+        guard let poller else { return [] }
+        // One broken entry must not stop the monitoring of the others.
+        let (file, problems) = try await config.loadSkipping()
         await poller.setConfig(file)
         await poller.pollAll(now: Date())
+        return problems
     }
 
     public func pollNow() async {
@@ -134,6 +146,26 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         try await store?.copy(to: url)
+    }
+
+    public func exportTransfer(password: String) async throws -> Data {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("monitor-export-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        guard let store else { throw Transfer.Error("база данных не открыта") }
+        try await store.copy(to: tmp)
+        let contents = try await config.exportContents()
+        return try Transfer.seal(contents, database: try Data(contentsOf: tmp), password: password)
+    }
+
+    public func importTransfer(_ data: Data, password: String) async throws -> ServersFile {
+        let (contents, database) = try Transfer.open(data, password: password)
+        let file = try await config.importContents(contents)
+        guard FileManager.default.createFile(atPath: DataFolder.pendingImport.path, contents: database,
+                                             attributes: [.posixPermissions: 0o600]) else {
+            throw Transfer.Error("не удалось сохранить историю из файла")
+        }
+        _ = try? await reload()
+        return file
     }
 
     public func setRefreshInterval(_ seconds: TimeInterval) async {

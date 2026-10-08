@@ -2,7 +2,6 @@ package collect
 
 import (
 	"bufio"
-	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -193,38 +192,52 @@ func logTime(line string, now time.Time) (time.Time, bool) {
 	return t, true
 }
 
-// ReadSSH reads the last few megabytes of the first auth log that exists.
+// ReadSSH counts the last day of the first auth log that exists, together
+// with the file rotated out of it (auth.log.1): right after the weekly
+// rotation the current file holds only minutes. Each file is streamed from
+// at most its last 32 MB, so a log flooded by scanners costs no memory.
 func ReadSSH(paths []string, now time.Time) (SSHLog, error) {
 	var lastErr error
 	for _, p := range paths {
-		b, err := tail(p, 8<<20)
+		cur, err := tailReader(p, sshTail)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		l := ParseSSH(bytes.NewReader(b), now)
+		readers := []io.Reader{}
+		if prev, err := tailReader(p+".1", sshTail); err == nil {
+			defer prev.Close()
+			// A line cut by the tail start must not join the next file's first line.
+			readers = append(readers, prev, strings.NewReader("\n"))
+		}
+		defer cur.Close()
+		l := ParseSSH(io.MultiReader(append(readers, cur)...), now)
 		l.Source = p
 		return l, nil
 	}
 	return SSHLog{}, lastErr
 }
 
-func tail(path string, max int64) ([]byte, error) {
+const sshTail = 32 << 20
+
+// tailReader opens path positioned at most max bytes before its end.
+func tailReader(path string, max int64) (*os.File, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
+		f.Close()
 		return nil, err
 	}
 	if st.Size() > max {
 		if _, err := f.Seek(st.Size()-max, io.SeekStart); err != nil {
+			f.Close()
 			return nil, err
 		}
 	}
-	return io.ReadAll(f)
+	return f, nil
 }
 
 // Backup is the dumps of one database container the app made over SSH

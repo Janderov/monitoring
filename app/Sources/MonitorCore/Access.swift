@@ -21,6 +21,8 @@ public enum UserAction: String, CaseIterable, Sendable {
     case manageAccess
     /// Unlocking the app with the admin key or recovery code.
     case adminLogin
+    /// Export everything, secrets included, to a file, or import one.
+    case transfer
 
     public var title: String {
         switch self {
@@ -34,6 +36,7 @@ public enum UserAction: String, CaseIterable, Sendable {
         case .updateApp: return "Обновление приложения"
         case .manageAccess: return "Управление доступом"
         case .adminLogin: return "Вход администратора"
+        case .transfer: return "Перенос данных"
         }
     }
 
