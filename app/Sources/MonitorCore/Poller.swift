@@ -363,6 +363,10 @@ public actor Poller {
                     frozenSince[s.id] = nil
                     sampleTimes[s.id] = snap.time
                 }
+            } else {
+                // No answer is its own alert; frozen sampling is counted
+                // again from the next answer.
+                frozenSince[s.id] = nil
             }
             if !macOffline && !expectedSilence {
                 let extra = [Rules.stale(frozenSince: frozenSince[s.id], now: now)].compactMap { $0 }
