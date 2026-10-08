@@ -20,11 +20,11 @@ enum Background {
         activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
                                                          reason: "Мониторинг серверов")
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak model] _ in
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             Task { @MainActor in
                 // Wi-Fi comes back a few seconds after waking up.
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
-                await model?.pollNow()
+                await model.pollNow()
             }
         }
         if !UserDefaults.standard.bool(forKey: launchSetKey), Bundle.main.bundleURL.path.hasPrefix("/Applications/") {
