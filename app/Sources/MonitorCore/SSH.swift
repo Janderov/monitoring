@@ -337,7 +337,7 @@ public enum TerminalSSH {
     }
 
     /// Single quotes unless the word is plainly safe.
-    static func quote(_ s: String) -> String {
+    public static func quote(_ s: String) -> String {
         let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.,/:=@%+")
         if !s.isEmpty, s.unicodeScalars.allSatisfy({ safe.contains($0) }) { return s }
         return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
