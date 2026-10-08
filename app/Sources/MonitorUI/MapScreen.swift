@@ -69,106 +69,170 @@ struct MapScreen: View {
     /// The history slider shows a past moment: live-only layers step aside.
     private var inPast: Bool { showHistory && history.time != nil }
 
-    var body: some View {
+    /// Everything drawn on the map this frame. Built once per body and
+    /// passed around, so no single expression is too big to type-check.
+    private struct Scene {
+        var pins: [Pin]
+        var routes: [VPNRoute]
+        var macAt: CLLocationCoordinate2D
+        var macRoutes: [MacRoute]
+        var hops: [ExternalHop]
+        var extPins: [ExternalPin]
+        var spots: [VPNClientSpot]
+        var clientPins: [ClientPin]
+        var chains: [NetworkChain]
+        var chosen: NetworkChain?
+        var clusters: [SiteCluster]
+    }
+
+    private func scene() -> Scene {
         let pins = pins
         let live = !inPast
-        let routes = showRoutes && live ? model.routes : []
-        let macAt = macCoordinate(pins)
-        let macRoutes = showMac && live ? mac.routes(model.statuses) : []
-        let hops = showExternal && live ? ExternalHop.compute(model).filter { showMac || $0.fromID != MacLinksModel.pinID } : []
-        let extPins = ExternalPin.group(hops, owners: external.owners, avoiding: pins.map(\.coordinate))
-        let spots = showClients && live ? VPNClientSpot.compute(model) : []
-        let clientPins = ClientPin.group(spots, owners: external.owners, avoiding: pins.map(\.coordinate))
+        let routes: [VPNRoute] = showRoutes && live ? model.routes : []
+        let macRoutes: [MacRoute] = showMac && live ? mac.routes(model.statuses) : []
+        var hops: [ExternalHop] = []
+        if showExternal && live {
+            hops = ExternalHop.compute(model).filter { showMac || $0.fromID != MacLinksModel.pinID }
+        }
+        let spots: [VPNClientSpot] = showClients && live ? VPNClientSpot.compute(model) : []
         let chains = NetworkChains.build(macID: MacLinksModel.pinID, macRoutes: macRoutes, routes: routes)
-        let chosen = chains.first { PathKey.id($0) == selectedPin }
-        let clusters = showSites ? siteClusters(pins) : []
+        let taken = pins.map(\.coordinate)
+        return Scene(pins: pins, routes: routes, macAt: macCoordinate(pins), macRoutes: macRoutes, hops: hops,
+                     extPins: ExternalPin.group(hops, owners: external.owners, avoiding: taken),
+                     spots: spots,
+                     clientPins: ClientPin.group(spots, owners: external.owners, avoiding: taken),
+                     chains: chains,
+                     chosen: chains.first { PathKey.id($0) == selectedPin },
+                     clusters: showSites ? siteClusters(pins) : [])
+    }
+
+    var body: some View {
+        let d = scene()
+        let titled = content(d)
+            .navigationTitle("Карта")
+            .navigationSubtitle(subtitle(d))
+            .toolbar { toolbarItems }
+        return lookups(d, watchers(titled))
+    }
+
+    private func subtitle(_ d: Scene) -> String {
+        "\(model.visible.count) серверов" + (d.routes.isEmpty ? "" : " · маршрутов VPN: \(d.routes.count)")
+    }
+
+    private func content(_ d: Scene) -> some View {
         HStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
-                Map(position: $position, selection: $selectedPin) {
-                    linkLayers()
-                    pathLayer(chosen, mac: macAt)
-                    routeLayer(routes, chains: chains)
-                    macRouteLayer(macRoutes, from: macAt, chains: chains)
-                    macCheckLayer(macAt)
-                    clientLayer(clientPins)
-                    externalLayer(extPins, mac: macAt)
-                    siteLayer(clusters)
-                    macPin(macAt)
-                    serverPins(pins)
-                }
-                .mapStyle(.standard(emphasis: .muted, pointsOfInterest: .excludingAll))
-                .mapControls {
-                    MapZoomStepper()
-                    MapCompass()
-                    MapScaleView()
-                }
-                .onMapCameraChange { ctx in center = ctx.region.center }
-                .overlay(alignment: .bottom) {
-                    if showHistory {
-                        HistoryBar(history: history, model: model)
-                            .frame(maxWidth: 720)
-                            .padding(12)
-                    }
-                }
-
+                mapView(d)
                 layers
                     .padding(12)
             }
-            inspector(pins: pins, clientPins: clientPins, extPins: extPins, chosen: chosen, clusters: clusters)
+            inspector(pins: d.pins, clientPins: d.clientPins, extPins: d.extPins, chosen: d.chosen, clusters: d.clusters)
         }
-        .navigationTitle("Карта")
-        .navigationSubtitle("\(model.visible.count) серверов" + (routes.isEmpty ? "" : " · маршрутов VPN: \(routes.count)"))
-        .toolbar {
-            ToolbarItem {
-                Picker("Показать", selection: $onlyProblems) {
-                    Text("Все").tag(false)
-                    Text("Только проблемы").tag(true)
+    }
+
+    private func mapView(_ d: Scene) -> some View {
+        Map(position: $position, selection: $selectedPin) {
+            mapContent(d)
+        }
+        .mapStyle(.standard(emphasis: .muted, pointsOfInterest: .excludingAll))
+        .mapControls {
+            MapZoomStepper()
+            MapCompass()
+            MapScaleView()
+        }
+        .onMapCameraChange { ctx in center = ctx.region.center }
+        .overlay(alignment: .bottom) { historyOverlay }
+    }
+
+    @MapContentBuilder
+    private func mapContent(_ d: Scene) -> some MapContent {
+        linkLayers()
+        pathLayer(d.chosen, mac: d.macAt)
+        routeLayer(d.routes, chains: d.chains)
+        macRouteLayer(d.macRoutes, from: d.macAt, chains: d.chains)
+        macCheckLayer(d.macAt)
+        clientLayer(d.clientPins)
+        externalLayer(d.extPins, mac: d.macAt)
+        siteLayer(d.clusters)
+        macPin(d.macAt)
+        serverPins(d.pins)
+    }
+
+    @ViewBuilder
+    private var historyOverlay: some View {
+        if showHistory {
+            HistoryBar(history: history, model: model)
+                .frame(maxWidth: 720)
+                .padding(12)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarItems: some ToolbarContent {
+        ToolbarItem {
+            Picker("Показать", selection: $onlyProblems) {
+                Text("Все").tag(false)
+                Text("Только проблемы").tag(true)
+            }
+            .pickerStyle(.segmented)
+        }
+        ToolbarItem {
+            Toggle(isOn: $showHistory) {
+                Label("История", systemImage: "clock.arrow.circlepath")
+            }
+            .help("Карта за последние 30 дней")
+        }
+        ToolbarItem {
+            Button { withAnimation { position = .automatic } } label: {
+                Label("Показать все серверы", systemImage: "arrow.up.left.and.arrow.down.right")
+            }
+            .help("Показать все серверы")
+        }
+    }
+
+    /// Background work while the map is open: the Mac's connections and
+    /// checks, where sites run, the history slider.
+    private func watchers<V: View>(_ v: V) -> some View {
+        v
+            .task(id: showMac) {
+                if showMac { await mac.run() }
+            }
+            .task {
+                probes.setTargets(model.statuses.map(\.server))
+                await probes.run()
+            }
+            .onChange(of: model.statuses.map(\.server), initial: true) { _, servers in
+                probes.setTargets(servers)
+                siteHosts.refresh(sites: model.siteConfigs, servers: servers)
+            }
+            .onChange(of: model.siteConfigs, initial: true) { _, sites in
+                siteHosts.refresh(sites: sites, servers: model.statuses.map(\.server))
+            }
+            .onChange(of: showHistory) { _, on in
+                if !on {
+                    history.stop()
+                    history.show(nil, model: model)
                 }
-                .pickerStyle(.segmented)
             }
-            ToolbarItem {
-                Toggle(isOn: $showHistory) {
-                    Label("История", systemImage: "clock.arrow.circlepath")
+    }
+
+    /// Country and network of the addresses on the map.
+    private func lookups<V: View>(_ d: Scene, _ v: V) -> some View {
+        let siteIPs = siteHosts.addresses.values.compactMap(\.first).sorted()
+        let clientIPs = d.spots.map(\.ip)
+        let hopIPs = d.hops.map(\.ip)
+        let pins = d.pins
+        return v
+            .onChange(of: siteIPs) { _, ips in external.request(ips) }
+            .onChange(of: clientIPs, initial: true) { _, ips in external.request(ips, first: true) }
+            .onChange(of: hopIPs, initial: true) { _, ips in external.request(ips) }
+            .onAppear {
+                locations.resetMovedOnce(model.visible.map(\.server))
+                // Opening the map from a server's menu selects its pin.
+                if let id = model.selectedServerID, let pin = pins.first(where: { $0.statuses.contains { $0.id == id } }) {
+                    selectedPin = pin.id
                 }
-                .help("Карта за последние 30 дней")
             }
-            ToolbarItem {
-                Button { withAnimation { position = .automatic } } label: {
-                    Label("Показать все серверы", systemImage: "arrow.up.left.and.arrow.down.right")
-                }
-                .help("Показать все серверы")
-            }
-        }
-        .task(id: showMac) {
-            if showMac { await mac.run() }
-        }
-        .task {
-            probes.setTargets(model.statuses.map(\.server))
-            await probes.run()
-        }
-        .onChange(of: model.statuses.map(\.server), initial: true) { _, servers in
-            probes.setTargets(servers)
-            siteHosts.refresh(sites: model.siteConfigs, servers: servers)
-        }
-        .onChange(of: model.siteConfigs, initial: true) { _, sites in
-            siteHosts.refresh(sites: sites, servers: model.statuses.map(\.server))
-        }
-        .onChange(of: siteHosts.addresses.values.compactMap(\.first).sorted()) { _, ips in external.request(ips) }
-        .onChange(of: showHistory) { _, on in
-            if !on {
-                history.stop()
-                history.show(nil, model: model)
-            }
-        }
-        .onChange(of: spots.map(\.ip), initial: true) { _, ips in external.request(ips, first: true) }
-        .onChange(of: hops.map(\.ip), initial: true) { _, ips in external.request(ips) }
-        .onAppear {
-            locations.resetMovedOnce(model.visible.map(\.server))
-            // Opening the map from a server's menu selects its pin.
-            if let id = model.selectedServerID, let pin = pins.first(where: { $0.statuses.contains { $0.id == id } }) {
-                selectedPin = pin.id
-            }
-        }
     }
 
     @ViewBuilder
