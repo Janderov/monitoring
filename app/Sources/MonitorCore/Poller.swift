@@ -399,6 +399,16 @@ public actor Poller {
                 }
             }
             let snap = try await client.snapshot(s)
+            // Reboots and container changes since the last round, including
+            // those inside the backfilled history.
+            let previous = (try? await store.latest(s.id)) ?? nil
+            for e in ServerEvents.changes(serverID: s.id, serverName: s.name, previous: previous,
+                                          snapshots: history + [snap]) {
+                // A container stuck restarting would flood the log: a few
+                // entries an hour per container are enough to see it.
+                let recent = (try? await store.eventCount(s.id, key: e.key, since: e.time.addingTimeInterval(-3600))) ?? 0
+                if recent < ServerEvents.maxPerHour { try? await store.addEvent(e) }
+            }
             try await store.setLatest(s.id, snap)
             try? await store.addVPNTraffic(s.id, snap)
             // Older agents report no interval and have no settings to change.

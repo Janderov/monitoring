@@ -130,7 +130,9 @@ public enum Rules {
 }
 
 public struct AlertEvent: Equatable, Sendable {
-    public enum Kind: String, Codable, Sendable { case fired, reminder, resolved }
+    /// `info` is a server's history (a reboot, a container stopping), logged
+    /// without a notification; the rest come from the alert rules.
+    public enum Kind: String, Codable, Sendable { case fired, reminder, resolved, info }
 
     public var serverID: String
     public var serverName: String
@@ -144,13 +146,14 @@ public struct AlertEvent: Equatable, Sendable {
     public var title: String {
         switch kind {
         case .resolved: return "✅ \(serverName)"
+        case .info: return serverName
         case .fired, .reminder: return "\(severity == .critical ? "🔴" : "🟡") \(serverName)"
         }
     }
 
     public var body: String {
         switch kind {
-        case .fired: return message
+        case .fired, .info: return message
         case .reminder: return "всё ещё: \(message)"
         case .resolved: return "снова в норме: \(message)"
         }

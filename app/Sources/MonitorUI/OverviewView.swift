@@ -203,11 +203,11 @@ struct JournalView: View {
             }
         }
         .navigationTitle("Журнал")
-        .navigationSubtitle(tab == .alerts ? "оповещения всех серверов" : "кто что делал в приложении")
+        .navigationSubtitle(tab == .alerts ? "оповещения и события серверов и сайтов" : "кто что делал в приложении")
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker("Журнал", selection: $tab) {
-                    Text("Оповещения").tag(JournalTab.alerts)
+                    Text("События").tag(JournalTab.alerts)
                     Text("Действия").tag(JournalTab.actions)
                 }
                 .pickerStyle(.segmented)

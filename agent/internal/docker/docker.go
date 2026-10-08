@@ -64,7 +64,8 @@ func convert(raw []apiContainer) []collect.Container {
 		if len(id) > 12 {
 			id = id[:12]
 		}
-		out = append(out, collect.Container{ID: id, Name: name, Image: r.Image, State: r.State, Status: r.Status, Health: health(r.Status)})
+		out = append(out, collect.Container{ID: id, FullID: r.ID, Name: name, Image: r.Image, State: r.State,
+			Status: r.Status, Health: health(r.Status)})
 	}
 	return out
 }

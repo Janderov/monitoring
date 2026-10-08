@@ -241,7 +241,7 @@ struct LinkLatencyBox: View {
         let to = Date(), from = to.addingTimeInterval(-period.seconds)
         let rows = (try? await model.backend.linkSamples(serverID, from: from, to: to)) ?? []
         // Minute checks are averaged into buckets so a week stays readable.
-        let bucket: TimeInterval = period.usesHourly ? 3600 : (period == .day ? 300 : 60)
+        let bucket = period.bucket
         var sums: [String: [TimeInterval: (Double, Int)]] = [:]
         var latest: [String: Store.LinkSample] = [:]
         for r in rows {

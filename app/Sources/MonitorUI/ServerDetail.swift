@@ -4,7 +4,7 @@ import MonitorCore
 import SwiftUI
 
 enum Period: String, CaseIterable, Identifiable {
-    case hour = "1 ч", day = "24 ч", week = "7 д", month = "30 д"
+    case hour = "1 ч", day = "24 ч", week = "7 д", month = "30 д", quarter = "90 д", year = "1 год"
     var id: String { rawValue }
 
     var seconds: TimeInterval {
@@ -13,13 +13,26 @@ enum Period: String, CaseIterable, Identifiable {
         case .day: return 86400
         case .week: return 7 * 86400
         case .month: return 30 * 86400
+        case .quarter: return 90 * 86400
+        case .year: return 365 * 86400
         }
     }
 
-    /// Minute samples for short periods, hourly rollups for long ones.
-    var usesHourly: Bool { self == .week || self == .month }
+    /// Minute samples for short periods, hourly rollups for long ones (the
+    /// minute data is kept 30 days, the hourly one a year).
+    var usesHourly: Bool { self != .hour && self != .day }
+    /// Points are averaged over this step so long periods stay readable.
+    var bucket: TimeInterval {
+        switch self {
+        case .hour: return 60
+        case .day: return 300
+        case .week, .month: return 3600
+        case .quarter: return 6 * 3600
+        case .year: return 86400
+        }
+    }
     /// A gap longer than this breaks the line (the Mac slept, the agent was down).
-    var gap: TimeInterval { usesHourly ? 3 * 3600 : 3 * 60 }
+    var gap: TimeInterval { usesHourly ? max(3 * 3600, bucket * 3) : 3 * 60 }
 }
 
 struct ServerDetail: View {
@@ -119,6 +132,7 @@ struct ServerDetail: View {
                   alignment: .leading, spacing: 10) {
             Group {
                 Fact(title: "Аптайм", value: snap.map { Fmt.duration($0.uptimeSeconds) } ?? "—")
+                Fact(title: "Включён", value: snap.map { Fmt.time($0.bootTime) } ?? "—")
                 Fact(title: "Load 1 · 5 · 15",
                      value: snap.map { String(format: "%.2f · %.2f · %.2f", $0.load.one, $0.load.five, $0.load.fifteen) } ?? "—")
                 Fact(title: "Память", value: snap.map {
@@ -210,6 +224,7 @@ private struct MetricsTab: View {
         } catch {
             rows = []
         }
+        if period.bucket > 3600 { rows = Self.average(rows, over: period.bucket) }
         var out: [String: [ChartPoint]] = [:]
         var segment = 0
         var last: Date?
@@ -219,6 +234,22 @@ private struct MetricsTab: View {
             for (k, v) in values { out[k, default: []].append(ChartPoint(time: t, value: v, series: k, segment: segment)) }
         }
         points = out
+    }
+
+    /// Averages rows into buckets of `step` seconds, oldest first.
+    static func average(_ rows: [(Date, [String: Double])], over step: TimeInterval) -> [(Date, [String: Double])] {
+        var sums: [TimeInterval: (values: [String: Double], count: Int)] = [:]
+        for (t, values) in rows {
+            let key = (t.timeIntervalSince1970 / step).rounded(.down) * step
+            var cur = sums[key] ?? ([:], 0)
+            for (k, v) in values { cur.values[k, default: 0] += v }
+            cur.count += 1
+            sums[key] = cur
+        }
+        return sums.keys.sorted().map { key in
+            let e = sums[key]!
+            return (Date(timeIntervalSince1970: key), e.values.mapValues { $0 / Double(e.count) })
+        }
     }
 }
 

@@ -67,10 +67,18 @@ struct ContainersTab: View {
                         Text(c.name)
                     }
                 }
-                TableColumn("Образ") { c in Text(c.image).foregroundStyle(.secondary).lineLimit(1) }
-                TableColumn("Состояние") { c in Text(c.state) }
-                TableColumn("Health") { c in Text(c.health ?? "—") }
-                TableColumn("Статус") { c in Text(c.status).foregroundStyle(.secondary) }
+                TableColumn("Образ") { c in Text(c.image).foregroundStyle(.secondary).lineLimit(1).help(c.image) }
+                TableColumn("Состояние") { c in Text(stateText(c)).lineLimit(1) }
+                TableColumn("CPU") { c in
+                    Text(c.cpuPercent.map(Fmt.percent) ?? "—").monospacedDigit()
+                }
+                .width(min: 50, ideal: 60)
+                TableColumn("Память") { c in
+                    Text(memText(c)).monospacedDigit().lineLimit(1)
+                        .help(c.memLimitBytes.map { "Лимит контейнера: \(Fmt.bytes($0))" } ?? "")
+                }
+                .width(min: 70, ideal: 110)
+                TableColumn("Статус") { c in Text(c.status).foregroundStyle(.secondary).lineLimit(1).help(c.status) }
                 TableColumn("") { c in
                     if model.can(.restart, server) {
                         Button("Перезапустить…") { model.present(.restartContainer(server.id, c.name)) }
@@ -81,6 +89,18 @@ struct ContainersTab: View {
             }
             .fitRows(containers.count, max: 20)
         }
+    }
+
+    private func stateText(_ c: Snapshot.Container) -> String {
+        guard let h = c.health, !h.isEmpty else { return c.state }
+        return "\(c.state) · \(h)"
+    }
+
+    /// "120 МБ", or "120 МБ из 512 МБ" when the container has a memory limit.
+    private func memText(_ c: Snapshot.Container) -> String {
+        guard let m = c.memBytes else { return "—" }
+        guard let l = c.memLimitBytes else { return Fmt.bytes(m) }
+        return "\(Fmt.bytes(m)) из \(Fmt.bytes(l))"
     }
 }
 
@@ -374,34 +394,49 @@ struct ChecksTab: View {
 
 extension Snapshot.Check: Identifiable {}
 
-/// Alert history, for one server or for all.
+/// Alert history and server events (reboots, containers), for one server or
+/// for all. Filters narrow the list by object, by kind and by text.
 struct EventsList: View {
     @ObservedObject var model: AppModel
     var serverID: String?
     var limit = 200
     @State private var events: [Store.LoggedEvent] = []
+    @State private var object = ""
+    @State private var filter = KindFilter.all
+    @State private var search = ""
+
+    enum KindFilter: String, CaseIterable, Identifiable {
+        case all = "Все", critical = "Критичные", warning = "Предупреждения", server = "События сервера"
+        var id: String { rawValue }
+    }
 
     var body: some View {
-        Group {
-            if events.isEmpty {
-                EmptyNote(title: "Событий пока нет").frame(minHeight: 120)
-            } else {
-                if serverID == nil {
-                    Table(rows) {
-                        TableColumn("Время") { r in Text(Fmt.time(r.event.time)).monospacedDigit() }.width(min: 90, ideal: 110)
-                        TableColumn("Важность") { r in kind(r.event) }.width(min: 110, ideal: 130)
-                        TableColumn("Сервер") { r in Text(model.objectName(r.event.serverID)) }
-                            .width(min: 70, ideal: 100)
-                        TableColumn("Что") { r in Text(r.event.message) }
-                    }
-                } else {
-                    Table(rows) {
-                        TableColumn("Время") { r in Text(Fmt.time(r.event.time)).monospacedDigit() }.width(min: 90, ideal: 110)
-                        TableColumn("Важность") { r in kind(r.event) }.width(min: 110, ideal: 130)
-                        TableColumn("Что") { r in Text(r.event.message) }
-                    }
-                    .fitRows(events.count, max: 20)
+        let shown = filtered
+        VStack(alignment: .leading, spacing: 0) {
+            filterBar(count: shown.count)
+                .padding(.horizontal, serverID == nil ? 16 : 0)
+                .padding(.vertical, 8)
+            if serverID == nil { Divider() }
+            if shown.isEmpty {
+                EmptyNote(title: events.isEmpty ? "Событий пока нет" : "Ничего не найдено",
+                          detail: events.isEmpty
+                            ? "Здесь появятся оповещения, перезагрузки и изменения контейнеров." : nil)
+                    .frame(minHeight: 120)
+            } else if serverID == nil {
+                Table(rows(shown)) {
+                    TableColumn("Время") { r in Text(Fmt.time(r.event.time)).monospacedDigit() }.width(min: 90, ideal: 110)
+                    TableColumn("Тип") { r in kind(r.event) }.width(min: 120, ideal: 140)
+                    TableColumn("Объект") { r in Text(model.objectName(r.event.serverID)).lineLimit(1) }
+                        .width(min: 70, ideal: 110)
+                    TableColumn("Что") { r in Text(r.event.message).lineLimit(1).help(r.event.message) }
                 }
+            } else {
+                Table(rows(shown)) {
+                    TableColumn("Время") { r in Text(Fmt.time(r.event.time)).monospacedDigit() }.width(min: 90, ideal: 110)
+                    TableColumn("Тип") { r in kind(r.event) }.width(min: 120, ideal: 140)
+                    TableColumn("Что") { r in Text(r.event.message).lineLimit(1).help(r.event.message) }
+                }
+                .fitRows(shown.count, max: 20)
             }
         }
         .task(id: model.lastRound) {
@@ -409,12 +444,84 @@ struct EventsList: View {
         }
     }
 
-    private var rows: [EventRow] { events.enumerated().map { EventRow(index: $0.offset, event: $0.element) } }
+    private func filterBar(count: Int) -> some View {
+        // Wraps the search field under the pickers when the pane is narrow.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                pickers
+                searchField.frame(minWidth: 140, maxWidth: 220)
+                Spacer(minLength: 0)
+                Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    pickers
+                    Spacer(minLength: 0)
+                    Text("\(count)").foregroundStyle(.secondary).monospacedDigit()
+                }
+                searchField
+            }
+        }
+    }
+
+    @ViewBuilder private var pickers: some View {
+        if serverID == nil {
+            Picker("Объект", selection: $object) {
+                Text("Все").tag("")
+                if !model.statuses.isEmpty {
+                    Section("Серверы") {
+                        ForEach(model.statuses, id: \.id) { Text($0.server.name).tag($0.id) }
+                    }
+                }
+                if !model.siteStatuses.isEmpty {
+                    Section("Сайты") {
+                        ForEach(model.siteStatuses, id: \.id) { Text($0.site.name).tag(SiteStatus.alertID($0.id)) }
+                    }
+                }
+            }
+            .fixedSize()
+        }
+        Picker("Тип", selection: $filter) {
+            ForEach(KindFilter.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .fixedSize()
+    }
+
+    private var searchField: some View {
+        TextField("Поиск", text: $search).textFieldStyle(.roundedBorder)
+    }
+
+    private var filtered: [Store.LoggedEvent] {
+        let q = search.trimmingCharacters(in: .whitespaces)
+        return events.filter { e in
+            guard object.isEmpty || e.serverID == object else { return false }
+            switch filter {
+            case .all: break
+            case .critical: if e.kind == .info || e.severity != .critical { return false }
+            case .warning: if e.kind == .info || e.severity != .warning { return false }
+            case .server: if e.kind != .info { return false }
+            }
+            return q.isEmpty || e.message.localizedCaseInsensitiveContains(q)
+                || model.objectName(e.serverID).localizedCaseInsensitiveContains(q)
+        }
+    }
+
+    private func rows(_ list: [Store.LoggedEvent]) -> [EventRow] {
+        list.enumerated().map { EventRow(index: $0.offset, event: $0.element) }
+    }
 
     private func kind(_ e: Store.LoggedEvent) -> some View {
         HStack(spacing: 6) {
-            StatusDot(level: e.kind == .resolved ? .ok : e.severity.level)
-            Text(kindLabel(e))
+            StatusDot(level: level(e))
+            Text(kindLabel(e)).lineLimit(1)
+        }
+    }
+
+    private func level(_ e: Store.LoggedEvent) -> ServerStatus.Level {
+        switch e.kind {
+        case .resolved: return .ok
+        case .info: return .unknown
+        case .fired, .reminder: return e.severity.level
         }
     }
 
@@ -423,6 +530,7 @@ struct EventsList: View {
         case .fired: return e.severity == .critical ? "Критично" : "Внимание"
         case .reminder: return "Напоминание"
         case .resolved: return "Снова в норме"
+        case .info: return e.key == "reboot" ? "Перезагрузка" : "Контейнер"
         }
     }
 }
