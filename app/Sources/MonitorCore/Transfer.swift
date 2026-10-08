@@ -17,7 +17,7 @@ public enum Transfer {
     public static let fileExtension = "monitortransfer"
     public static let minPasswordLength = 8
     static let magic = Data("MONITOR-TRANSFER-1\n".utf8)
-    static let iterations: UInt32 = 300_000
+    public static let iterations: UInt32 = 300_000
 
     public struct Contents: Codable, Equatable, Sendable {
         public var created: Date
