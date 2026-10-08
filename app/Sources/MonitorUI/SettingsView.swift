@@ -39,6 +39,10 @@ private struct GeneralSettings: View {
     @ObservedObject var model: AppModel
     @AppStorage("sshUser.default") private var sshUser = "root"
     @AppStorage(Poller.refreshDefaultsKey) private var refresh = Poller.interval
+    // Same keys as MorningDigest.
+    @AppStorage("digest.enabled") private var digest = true
+    @AppStorage("digest.hour") private var digestHour = 9
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Form {
@@ -60,6 +64,18 @@ private struct GeneralSettings: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let err = model.configError {
                     Text(err).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Section("Утренняя сводка") {
+                Toggle("Присылать уведомление утром", isOn: $digest)
+                Picker("Время", selection: $digestHour) {
+                    ForEach(5...12, id: \.self) { h in Text(String(format: "%02d:00", h)).tag(h) }
+                }
+                .disabled(!digest)
+                Text("Как прошла ночь, что скоро истекает и что ждёт обслуживания. Если Мак спал, сводка придёт, когда он проснётся.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                LabeledContent("Мини-панель") {
+                    Button("Открыть") { openWindow(id: MiniPanel.id) }
                 }
             }
             Section("SSH") {

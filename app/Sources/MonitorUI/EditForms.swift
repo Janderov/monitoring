@@ -283,6 +283,9 @@ struct ServerEditForm: View {
     @State private var busy = false
     @State private var error: String?
     @State private var confirmDelete = false
+    @State private var price = ""
+    @State private var currency = "₽"
+    @State private var payDay = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -291,6 +294,19 @@ struct ServerEditForm: View {
                     TextField("Название", text: $name)
                     TextField("Группа", text: $group, prompt: Text("например, страна"))
                     TextField("Теги", text: $tags, prompt: Text("через запятую"))
+                }
+                Section("Стоимость") {
+                    HStack {
+                        TextField("В месяц", text: $price, prompt: Text("не указана"))
+                        Picker("", selection: $currency) {
+                            ForEach(["₽", "€", "$"], id: \.self) { Text($0).tag($0) }
+                        }
+                        .labelsHidden().fixedSize()
+                    }
+                    Picker("День оплаты", selection: $payDay) {
+                        Text("не следить").tag(0)
+                        ForEach(1...31, id: \.self) { Text("\($0)-е число").tag($0) }
+                    }
                 }
                 Section {
                     DisclosureGroup("Подключение к агенту", isExpanded: $showConnection) {
@@ -319,6 +335,11 @@ struct ServerEditForm: View {
             name = original.name; host = original.host; port = original.port
             group = original.group ?? ""; tags = (original.tags ?? []).joined(separator: ", ")
             fingerprint = original.fingerprint
+            if let c = original.cost {
+                price = Money.text(c.monthly, "").trimmingCharacters(in: .whitespaces)
+                currency = c.currency
+                payDay = c.payDay ?? 0
+            }
         }
         .confirmationDialog("Удалить «\(original.name)» из мониторинга?", isPresented: $confirmDelete) {
             Button("Удалить", role: .destructive, action: remove)
@@ -336,6 +357,11 @@ struct ServerEditForm: View {
         s.tags = tagList(tags)
         if let t = optional(token) { s.token = t.filter(\.isHexDigit) }
         s.fingerprint = trimmed(fingerprint)
+        if let v = Double(trimmed(price).replacingOccurrences(of: ",", with: ".").replacingOccurrences(of: " ", with: "")), v > 0 {
+            s.cost = ServerCost(monthly: v, currency: currency, payDay: payDay == 0 ? nil : payDay)
+        } else {
+            s.cost = nil
+        }
         run { try await model.save(server: s) }
     }
 
@@ -628,7 +654,7 @@ struct AddServerForm: View {
         let n = optional(name) ?? h
         return ServerConfig(id: reinstall?.id ?? model.newServerID(from: n), name: n, host: h, port: port,
                             token: token, fingerprint: fingerprint, group: optional(group), tags: tagList(tags),
-                            thresholds: reinstall?.thresholds, ssh: ssh ?? reinstall?.ssh)
+                            thresholds: reinstall?.thresholds, ssh: ssh ?? reinstall?.ssh, cost: reinstall?.cost)
     }
 
     private func start() {

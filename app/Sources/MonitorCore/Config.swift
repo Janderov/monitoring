@@ -19,13 +19,16 @@ public struct ServerConfig: Codable, Equatable, Identifiable, Sendable {
     /// How the Mac logs in over SSH (agent install, VPN keys), as entered in
     /// the add-server form; nil means `ssh root@host` with ~/.ssh/config.
     public var ssh: SSHTarget?
+    /// What the server costs, entered by hand.
+    public var cost: ServerCost?
 
     public init(id: String, name: String, host: String, port: Int = 9443, token: String,
                 fingerprint: String, group: String? = nil, tags: [String]? = nil,
-                thresholds: Thresholds? = nil, ssh: SSHTarget? = nil) {
+                thresholds: Thresholds? = nil, ssh: SSHTarget? = nil, cost: ServerCost? = nil) {
         self.id = id; self.name = name; self.host = host; self.port = port
         self.token = token; self.fingerprint = fingerprint
         self.group = group; self.tags = tags; self.thresholds = thresholds; self.ssh = ssh
+        self.cost = cost
     }
 
     /// Where to SSH for this server.
@@ -38,7 +41,7 @@ public struct ServerConfig: Codable, Equatable, Identifiable, Sendable {
     public var baseURL: URL { URL(string: "https://\(host):\(port)")! }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, host, port, token, fingerprint, group, tags, thresholds, ssh
+        case id, name, host, port, token, fingerprint, group, tags, thresholds, ssh, cost
     }
 
     public init(from decoder: Decoder) throws {
@@ -53,6 +56,7 @@ public struct ServerConfig: Codable, Equatable, Identifiable, Sendable {
         tags = try c.decodeIfPresent([String].self, forKey: .tags)
         thresholds = try c.decodeIfPresent(Thresholds.self, forKey: .thresholds)
         ssh = try c.decodeIfPresent(SSHTarget.self, forKey: .ssh)
+        cost = try c.decodeIfPresent(ServerCost.self, forKey: .cost)
     }
 
     /// An empty token is omitted, which is how the file stores servers whose
@@ -69,6 +73,35 @@ public struct ServerConfig: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(tags, forKey: .tags)
         try c.encodeIfPresent(thresholds, forKey: .thresholds)
         try c.encodeIfPresent(ssh, forKey: .ssh)
+        try c.encodeIfPresent(cost, forKey: .cost)
+    }
+}
+
+/// A server's price per month and the day of the month it is paid.
+public struct ServerCost: Codable, Equatable, Sendable {
+    public var monthly: Double
+    /// "₽", "€", "$".
+    public var currency: String
+    /// 1...31; nil when the payment day is not tracked.
+    public var payDay: Int?
+
+    public init(monthly: Double, currency: String, payDay: Int? = nil) {
+        self.monthly = monthly; self.currency = currency; self.payDay = payDay
+    }
+
+    /// The next payment on or after the start of today; the day is clamped to
+    /// short months (31 -> 30 or 28).
+    public func nextPayment(after now: Date, calendar: Calendar = .current) -> Date? {
+        guard let day = payDay, (1...31).contains(day) else { return nil }
+        let today = calendar.startOfDay(for: now)
+        for offset in 0...1 {
+            guard let month = calendar.date(byAdding: .month, value: offset, to: today),
+                  let range = calendar.range(of: .day, in: .month, for: month) else { continue }
+            var parts = calendar.dateComponents([.year, .month], from: month)
+            parts.day = min(day, range.count)
+            if let d = calendar.date(from: parts), d >= today { return d }
+        }
+        return nil
     }
 }
 

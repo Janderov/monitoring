@@ -100,14 +100,20 @@ struct RestartSheet: View {
 // MARK: - Databases
 
 struct DatabasesTab: View {
+    @ObservedObject var model: AppModel
+    var server: ServerConfig
     /// Nil when the agent is too old to report databases.
     var databases: [Snapshot.Database]?
+    /// Nil when the agent is too old to report backups.
+    var backups: [Snapshot.Backup]?
 
     var body: some View {
         if let databases, !databases.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(databases, id: \.container) { db in
-                    DatabaseBox(db: db)
+                    DatabaseBox(db: db) {
+                        BackupRow(model: model, server: server, db: db, backups: backups)
+                    }
                 }
             }
         } else if databases == nil {
@@ -120,8 +126,9 @@ struct DatabasesTab: View {
     }
 }
 
-private struct DatabaseBox: View {
+private struct DatabaseBox<Footer: View>: View {
     var db: Snapshot.Database
+    @ViewBuilder var footer: Footer
 
     private var engine: String {
         switch db.engine.lowercased() {
@@ -161,6 +168,7 @@ private struct DatabaseBox: View {
                     }
                     .fitRows(sizes.count, max: 12)
                 }
+                footer
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: {

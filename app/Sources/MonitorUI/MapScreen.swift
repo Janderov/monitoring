@@ -716,7 +716,9 @@ struct MapScreen: View {
     private func soonBadge(_ pin: Pin) -> Bool {
         guard showSoon, !inPast else { return false }
         let now = Date()
-        return pin.statuses.contains { Soon.badge(soon.items(for: $0.id, model: model), now: now) }
+        return pin.statuses.contains {
+            Soon.badge(soon.items(for: $0.id, model: model), now: now) || Care.notes($0.snapshot, now: now).contains(where: \.warn)
+        }
     }
 
     /// Now, or at the moment the history shows.
@@ -969,6 +971,7 @@ private struct MapInspector: View {
                 .font(.callout).monospacedDigit()
             }
             SoonSection(items: model.soon.items(for: s.id, model: model))
+            CareSection(notes: Care.notes(s.snapshot, now: Date()).filter(\.warn))
             HStack {
                 if model.can(.ssh, s.server) {
                     Button { model.openSSH(s.server) } label: { Label("SSH", systemImage: "terminal") }

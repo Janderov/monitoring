@@ -84,6 +84,7 @@ public struct MenuBarContent: View {
             Divider().padding(.horizontal, 12)
             VStack(spacing: 0) {
                 MenuButton(title: "Открыть окно", shortcut: "⌘0") { openMain() }
+            MenuButton(title: "Мини-панель", shortcut: "") { openWindow(id: MiniPanel.id) }
                 MenuButton(title: "Выйти", shortcut: "⌘Q") { NSApp.terminate(nil) }
             }
             .padding(.vertical, 4)

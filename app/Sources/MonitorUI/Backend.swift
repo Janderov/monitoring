@@ -56,6 +56,10 @@ public protocol MonitorBackend: AnyObject, Sendable {
     // Restarts over SSH, with the same password rules; both go to the audit log.
     func restartContainer(server: ServerConfig, container: String, password: String?) async throws
     func rebootServer(server: ServerConfig, password: String?) async throws
+    /// Dumps a database container now; returns the file on the server.
+    func backupDatabase(server: ServerConfig, container: String, engine: String, password: String?) async throws -> String
+    /// Turns the nightly dump of a database container on or off.
+    func setNightlyBackup(server: ServerConfig, container: String, engine: String, on: Bool, password: String?) async throws
 
     /// Checks the permission, runs `body` and writes the outcome to the
     /// audit log ("Журнал действий").
@@ -282,6 +286,28 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
             try await control.reboot()
         }
         await poller?.markRebooting(server.id)
+    }
+
+    // MARK: Backups
+
+    public func backupDatabase(server: ServerConfig, container: String, engine: String,
+                               password: String?) async throws -> String {
+        let control = ServerControl(server: server, password: password ?? savedPassword(serverID: server.id))
+        let file = try await audited(.backup, on: .server(server), detail: "бэкап базы \(container)") {
+            try await control.backup(container: container, engine: engine)
+        }
+        await pollNow()
+        return file
+    }
+
+    public func setNightlyBackup(server: ServerConfig, container: String, engine: String, on: Bool,
+                                 password: String?) async throws {
+        let control = ServerControl(server: server, password: password ?? savedPassword(serverID: server.id))
+        try await audited(.backup, on: .server(server),
+                          detail: (on ? "включён" : "выключен") + " ночной бэкап базы \(container)") {
+            try await control.setNightlyBackup(container: container, engine: engine, on: on)
+        }
+        await pollNow()
     }
 }
 
