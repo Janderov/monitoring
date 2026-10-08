@@ -17,6 +17,8 @@ public final class MacLinksModel: ObservableObject {
     /// Kept in memory only and searched just for our servers' addresses.
     private var proxySettings: [String: String] = [:]
     @Published public private(set) var updated: Date?
+    /// Bytes per second of each connection, between two readings.
+    @Published public private(set) var rates = RateMeter()
 
     public static let pinID = "this-mac"
 
@@ -27,6 +29,17 @@ public final class MacLinksModel: ObservableObject {
                 let (links, proxies) = MacLinksModel.read()
                 return (links, MacLinksModel.tunnelAddresses(), MacLinksModel.settings(of: proxies))
             }.value
+            let now = Date()
+            var meter = rates
+            var keys = Set<String>()
+            for l in found {
+                for (k, c) in RateMeter.connectionKeys(l) {
+                    meter.add(k, c, at: now)
+                    keys.insert(k)
+                }
+            }
+            meter.keep(keys)
+            rates = meter
             links = found
             tunnelAddresses = tunnels
             proxySettings = settings
