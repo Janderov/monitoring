@@ -220,6 +220,10 @@ func cmdRun(args []string) error {
 	// History stays one sample per minute however fast the agent samples,
 	// so buffer_size still means 24 h and the Mac's database does not grow.
 	ring := buffer.NewEvery(c.BufferSize, time.Minute)
+	if err := ring.Persist(filepath.Join(c.StateDir, "history.jsonl"), time.Now(),
+		time.Duration(c.BufferSize)*time.Minute); err != nil {
+		log.Printf("history is kept in memory only: %v", err)
+	}
 	go sampleLoop(ctx, s, ring)
 
 	srv := &http.Server{
@@ -476,12 +480,11 @@ func sampleLoop(ctx context.Context, s *sampler, ring *buffer.Ring) {
 	case <-time.After(time.Second):
 	}
 
+	var errs errorLog
 	for {
 		start := time.Now()
 		snap := s.sample(ctx)
-		for _, e := range snap.Errors {
-			log.Printf("sample: %s", e)
-		}
+		errs.note(snap.Errors, log.Printf)
 		ring.Add(snap)
 	wait:
 		for {
@@ -497,4 +500,25 @@ func sampleLoop(ctx context.Context, s *sampler, ring *buffer.Ring) {
 			}
 		}
 	}
+}
+
+// errorLog writes a sample error when it appears and when it is gone, not
+// every sample: the same error would otherwise fill the journal thousands of
+// times a day.
+type errorLog map[string]bool
+
+func (l *errorLog) note(errs []string, logf func(string, ...any)) {
+	now := map[string]bool{}
+	for _, e := range errs {
+		now[e] = true
+		if !(*l)[e] {
+			logf("sample: %s", e)
+		}
+	}
+	for e := range *l {
+		if !now[e] {
+			logf("sample: resolved: %s", e)
+		}
+	}
+	*l = now
 }

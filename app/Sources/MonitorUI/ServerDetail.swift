@@ -68,6 +68,9 @@ struct ServerDetail: View {
                 if let err = status.error, status.alerts.isEmpty {
                     AlertStrip(level: .unknown, text: "Последний опрос не удался: \(err)", trailing: nil)
                 }
+                if let why = status.checksError {
+                    AlertStrip(level: .warning, text: "Агент не принял список проверок сайтов и соседей: \(why)", trailing: nil)
+                }
                 ForEach(snap?.errors ?? [], id: \.self) { e in
                     Label(e, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }

@@ -1,6 +1,7 @@
 package buffer
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -95,5 +96,47 @@ func TestEveryKeepsOnePerStep(t *testing.T) {
 	r.Add(at(59))
 	if got := secs(r.Since(time.Time{}, 0)); !equal(got, []int64{0, 59}) {
 		t.Errorf("history = %v, want [0 59]", got)
+	}
+}
+
+func TestPersist(t *testing.T) {
+	path := t.TempDir() + "/history.jsonl"
+	now := time.Unix(10_000, 0)
+	r := NewEvery(4, time.Minute)
+	if err := r.Persist(path, now, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	for _, sec := range []int{9_000, 9_030, 9_060, 9_120, 9_180, 9_240, 9_300, 9_360, 9_420, 9_480} {
+		r.Add(at(sec))
+	}
+	// The agent restarts: the history is back, the current state is not.
+	back := NewEvery(4, time.Minute)
+	if err := back.Persist(path, now, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := secs(back.Since(time.Time{}, 0)), []int64{9_300, 9_360, 9_420, 9_480}; !equal(got, want) {
+		t.Errorf("after restart = %v, want %v", got, want)
+	}
+	if _, ok := back.Latest(); ok {
+		t.Error("Latest after restart should wait for a new sample")
+	}
+	// Too old, or a line broken by a crash: skipped.
+	old := NewEvery(4, time.Minute)
+	if err := old.Persist(path, time.Unix(9_421+3600, 0), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got := secs(old.Since(time.Time{}, 0)); !equal(got, []int64{9_480}) {
+		t.Errorf("old samples kept: %v", got)
+	}
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString(`{"time":"2026`)
+	f.Close()
+	again := NewEvery(4, time.Minute)
+	if err := again.Persist(path, time.Unix(9_421+3600, 0), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	again.Add(at(9_540))
+	if got := secs(again.Since(time.Time{}, 0)); !equal(got, []int64{9_480, 9_540}) {
+		t.Errorf("after broken line = %v", got)
 	}
 }

@@ -27,11 +27,16 @@ func dbEngine(image string) string {
 // superuser, MySQL gets the root password from the container's environment.
 // Neither the password nor any data leaves the container.
 const (
-	pgQuery = `psql -U "${POSTGRES_USER:-postgres}" -d postgres -AtF '|' -c "` +
+	// inContainerTimeout stops a query that hangs inside the container (a
+	// locked database) instead of leaving it running there; images without
+	// `timeout` run the command as before.
+	inContainerTimeout = `T=; command -v timeout >/dev/null 2>&1 && T="timeout 10"; `
+
+	pgQuery = inContainerTimeout + `PGOPTIONS='-c statement_timeout=10s' $T psql -U "${POSTGRES_USER:-postgres}" -d postgres -AtF '|' -c "` +
 		`select 'conn', count(*), current_setting('max_connections') from pg_stat_activity where datname is not null;` +
 		` select 'db', datname, pg_database_size(datname) from pg_database where not datistemplate"`
-	mysqlQuery = `P="${MYSQL_ROOT_PASSWORD:-$MARIADB_ROOT_PASSWORD}"; C=mysql; command -v mysql >/dev/null 2>&1 || C=mariadb; ` +
-		`MYSQL_PWD="$P" $C -uroot -N -B -e "` +
+	mysqlQuery = inContainerTimeout + `P="${MYSQL_ROOT_PASSWORD:-$MARIADB_ROOT_PASSWORD}"; C=mysql; command -v mysql >/dev/null 2>&1 || C=mariadb; ` +
+		`MYSQL_PWD="$P" $T $C -uroot -N -B -e "` +
 		`select 'conn', variable_value, @@max_connections from performance_schema.global_status where variable_name = 'Threads_connected';` +
 		` select 'db', table_schema, coalesce(sum(data_length + index_length), 0) from information_schema.tables` +
 		` where table_schema not in ('mysql', 'sys', 'performance_schema', 'information_schema') group by table_schema"`

@@ -23,6 +23,8 @@ type Client struct {
 	mu sync.Mutex
 	// deadline bounds every call of the current sample; zero means no bound.
 	deadline time.Time
+	// names: VPN client names per container, read every few minutes.
+	names map[string]clientNames
 }
 
 // ErrBudget: an earlier call in this sample used up the time Docker gets.

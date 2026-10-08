@@ -10,13 +10,29 @@ import Foundation
 public actor Store {
     public static let sampleRetention: TimeInterval = 30 * 86400
     public static let hourlyRetention: TimeInterval = 365 * 86400
+    /// Checks between servers, one row per minute and pair, kept 3 days;
+    /// older ones are in link_hourly.
+    public static let linkRetention: TimeInterval = 3 * 86400
+    /// Old rows are deleted once an hour, not every minute.
+    public static let pruneEvery: TimeInterval = 3600
 
     private let db: SQLiteDB
+    private var prunedAt: Date?
 
     public init(path: String) throws {
         db = try SQLiteDB(path: path)
         try db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
+        try Store.enableIncrementalVacuum(db)
         try Store.migrate(db)
+    }
+
+    /// Lets the file shrink a little after each cleanup instead of only
+    /// growing. A database made before this needs one full VACUUM, once.
+    static func enableIncrementalVacuum(_ db: SQLiteDB) throws {
+        guard try db.prepare("PRAGMA auto_vacuum").rows().first?.int(0) == 0 else { return }
+        try db.exec("PRAGMA auto_vacuum = INCREMENTAL")
+        let tables = try db.prepare("SELECT count(*) FROM sqlite_master WHERE type = 'table'").rows().first?.int(0) ?? 0
+        if tables > 0 { try db.exec("VACUUM") }
     }
 
     /// Schema changes, applied in order and recorded in `PRAGMA user_version`.
@@ -96,6 +112,22 @@ public actor Store {
         // and when the Mac last polled.
         """
         CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+        """,
+        // Ready for 50 servers: cleanup and rollups find old rows by time
+        // instead of reading whole tables, and checks between servers are
+        // kept per hour after 3 days.
+        """
+        CREATE INDEX samples_ts ON samples (ts);
+        CREATE INDEX polls_ts ON polls (ts);
+        CREATE INDEX site_samples_ts ON site_samples (ts);
+        CREATE INDEX link_samples_ts ON link_samples (ts);
+        CREATE TABLE link_hourly (
+          server_id TEXT NOT NULL, peer_id TEXT NOT NULL, hour INTEGER NOT NULL,
+          ok INTEGER NOT NULL, total INTEGER NOT NULL, latency_ms REAL,
+          PRIMARY KEY (server_id, peer_id, hour)) WITHOUT ROWID;
+        INSERT INTO link_hourly
+          SELECT server_id, peer_id, ts / 3600 * 3600, SUM(ok), COUNT(*), AVG(latency_ms)
+          FROM link_samples GROUP BY 1, 2, 3;
         """,
     ]
 
@@ -261,7 +293,7 @@ public actor Store {
     }
 
     /// Recomputes the hourly rows for every hour touched since `since`
-    /// (re-running is harmless), then drops data past retention.
+    /// (re-running is harmless), then, once an hour, drops data past retention.
     public func rollup(since: Date, now: Date) throws {
         let from = Int64(since.timeIntervalSince1970) / 3600 * 3600
         try db.transaction {
@@ -282,26 +314,43 @@ public actor Store {
                        FROM polls WHERE ts >= ?1 GROUP BY 1, 2) p
               ON p.server_id = h.server_id AND p.hour = h.hour
             """).run(.int(from))
+            try db.prepare("""
+            INSERT OR REPLACE INTO link_hourly (server_id, peer_id, hour, ok, total, latency_ms)
+            SELECT server_id, peer_id, ts / 3600 * 3600, SUM(ok), COUNT(*), AVG(latency_ms)
+            FROM link_samples WHERE ts >= ? GROUP BY 1, 2, 3
+            """).run(.int(from))
+        }
+        if let prunedAt, now.timeIntervalSince(prunedAt) < Store.pruneEvery, now >= prunedAt { return }
+        try prune(now: now)
+        prunedAt = now
+    }
 
+    func prune(now: Date) throws {
+        try db.transaction {
             let sampleCut = Int64(now.timeIntervalSince1970 - Store.sampleRetention)
             let hourlyCut = Int64(now.timeIntervalSince1970 - Store.hourlyRetention)
             try db.prepare("DELETE FROM samples WHERE ts < ?").run(.int(sampleCut))
             try db.prepare("DELETE FROM polls WHERE ts < ?").run(.int(sampleCut))
             try db.prepare("DELETE FROM site_samples WHERE ts < ?").run(.int(sampleCut))
-            try db.prepare("DELETE FROM link_samples WHERE ts < ?").run(.int(sampleCut))
+            let linkCut = Int64(now.timeIntervalSince1970 - Store.linkRetention)
+            try db.prepare("DELETE FROM link_samples WHERE ts < ?").run(.int(linkCut))
+            try db.prepare("DELETE FROM link_hourly WHERE hour < ?").run(.int(hourlyCut))
             try db.prepare("DELETE FROM hourly WHERE hour < ?").run(.int(hourlyCut))
             try db.prepare("DELETE FROM events WHERE ts < ?").run(.int(hourlyCut))
             try db.prepare("DELETE FROM vpn_traffic WHERE day < ?").run(.int(hourlyCut))
         }
+        // Give back up to ~4 MB of freed pages per cleanup.
+        try db.exec("PRAGMA incremental_vacuum(1000)")
     }
 
     /// Drops everything about servers no longer in the config except the
     /// event log, which stays readable.
     public func forget(serverID: String) throws {
-        for table in ["samples", "hourly", "polls", "latest", "vpn_counters", "vpn_traffic", "link_samples"] {
+        for table in ["samples", "hourly", "polls", "latest", "vpn_counters", "vpn_traffic", "link_samples", "link_hourly"] {
             try db.prepare("DELETE FROM \(table) WHERE server_id = ?").run(.text(serverID))
         }
         try db.prepare("DELETE FROM link_samples WHERE peer_id = ?").run(.text(serverID))
+        try db.prepare("DELETE FROM link_hourly WHERE peer_id = ?").run(.text(serverID))
     }
 
     // MARK: reads
@@ -344,16 +393,36 @@ public actor Store {
         public var latencyMs: Double?
     }
 
-    /// Checks made by `serverID` to the other servers, oldest first.
+    /// Checks made by `serverID` to the other servers, oldest first. Hours
+    /// before the minute rows kept give one sample each (ok when most checks
+    /// were, the average latency), timed inside [from, to] so a moment in
+    /// that hour finds it.
     public func linkSamples(_ serverID: String, from: Date, to: Date) throws -> [LinkSample] {
-        try db.prepare("""
+        let lo = Int64(from.timeIntervalSince1970), hi = Int64(to.timeIntervalSince1970)
+        let minutes = try db.prepare("""
         SELECT peer_id, ts, ok, latency_ms FROM link_samples
         WHERE server_id = ? AND ts >= ? AND ts <= ? ORDER BY ts, peer_id
-        """).rows(.text(serverID), .int(Int64(from.timeIntervalSince1970)), .int(Int64(to.timeIntervalSince1970)))
+        """).rows(.text(serverID), .int(lo), .int(hi))
             .map { r in
                 LinkSample(peerID: r.text(0) ?? "", time: Date(timeIntervalSince1970: TimeInterval(r.int(1) ?? 0)),
                            ok: r.int(2) == 1, latencyMs: r.real(3))
             }
+        let firstMinute = try db.prepare("SELECT MIN(ts) FROM link_samples WHERE server_id = ?")
+            .rows(.text(serverID)).first?.int(0)
+        let before = firstMinute.map { $0 / 3600 * 3600 } ?? Int64.max
+        guard lo < before else { return minutes }
+        let hours = try db.prepare("""
+        SELECT peer_id, hour, ok, total, latency_ms FROM link_hourly
+        WHERE server_id = ? AND hour > ? AND hour <= ? AND hour < ? ORDER BY hour, peer_id
+        """).rows(.text(serverID), .int(lo - 3600), .int(hi), .int(before))
+            .map { r in
+                let hour = r.int(1) ?? 0
+                let t = min(max(hour + 1800, lo, hour), hi, hour + 3599)
+                let ok = r.int(2) ?? 0, total = r.int(3) ?? 0
+                return LinkSample(peerID: r.text(0) ?? "", time: Date(timeIntervalSince1970: TimeInterval(t)),
+                                  ok: total > 0 && ok * 2 >= total, latencyMs: r.real(4))
+            }
+        return hours + minutes
     }
 
     public struct SiteSample: Equatable, Sendable {

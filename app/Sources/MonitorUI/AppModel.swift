@@ -147,8 +147,9 @@ public final class AppModel: ObservableObject {
     /// Re-reads servers.json and polls right away.
     public func reload() async {
         do {
-            try await backend.reload()
-            configError = nil
+            let skipped = try await backend.reload()
+            configError = skipped.isEmpty ? nil
+                : "servers.json: пропущено, остальные проверяются: " + skipped.joined(separator: "; ")
         } catch {
             configError = "servers.json: \(describe(error))"
         }

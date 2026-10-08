@@ -111,9 +111,11 @@ private struct GeneralSettings: View {
                     }
                 }
                 LabeledContent("Хранение", value: "поминутно \(Int(Store.sampleRetention / 86400)) дн., по часам \(Int(Store.hourlyRetention / 86400)) дн.")
+                LabeledContent("Копия базы", value: "каждый день, две последние в папке Backups")
                 LabeledContent("Размер базы", value: databaseSize)
                 Text("Агенты помнят последние \(Int(Poller.firstBackfill / 3600)) ч, поэтому графики дополняются, когда Мак был выключен или спал.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                TransferSettings(model: model)
             }
         }
         .formStyle(.grouped)

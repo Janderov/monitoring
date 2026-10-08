@@ -30,6 +30,7 @@ enum Background {
         Task { @MainActor in
             while true {
                 remindCertificate(model)
+                await copyDatabase(model)
                 try? await Task.sleep(nanoseconds: 6 * 3600 * 1_000_000_000)
             }
         }
@@ -52,6 +53,15 @@ enum Background {
                                         severity: .warning,
                                         message: "истекает через \(left) дн. Выпустите новый по инструкции docs/signing.md, иначе обновления остановятся",
                                         time: Date())])
+    }
+
+    /// A copy of the database once a day, kept for two days, so a damaged
+    /// file (a full disk, a crash) loses at most a day.
+    static func copyDatabase(_ model: AppModel, now: Date = Date()) async {
+        let url = DataFolder.dailyCopy(now)
+        if let made = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date,
+           Calendar.current.isDate(made, inSameDayAs: now) { return }
+        try? await model.backend.copyDatabase(to: url)
     }
 
     static var launchAtLogin: Bool { SMAppService.mainApp.status == .enabled }

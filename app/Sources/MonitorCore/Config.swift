@@ -196,6 +196,74 @@ public struct ServersFile: Codable, Sendable {
         return try d.decode(ServersFile.self, from: data)
     }
 
+    /// For monitoring: an entry that cannot be read or is invalid is left
+    /// out with the reason, and the others are watched. Only a file that is
+    /// not JSON at all stops everything.
+    public static func decodeSkipping(_ data: Data) throws -> (file: ServersFile, problems: [String]) {
+        let d = JSONDecoder()
+        d.keyDecodingStrategy = .convertFromSnakeCase
+        let raw = try d.decode(Lossy.self, from: data)
+        var problems: [String] = []
+        var servers: [ServerConfig] = []
+        for (i, e) in raw.servers.enumerated() {
+            if let s = e.value { servers.append(s) } else { problems.append("сервер №\(i + 1): \(e.error ?? "")") }
+        }
+        var sites: [SiteConfig] = []
+        for (i, e) in (raw.sites ?? []).enumerated() {
+            if let s = e.value { sites.append(s) } else { problems.append("сайт №\(i + 1): \(e.error ?? "")") }
+        }
+        let (file, invalid) = ServersFile(servers: servers, sites: raw.sites == nil ? nil : sites).usable()
+        return (file, problems + invalid)
+    }
+
+    /// The servers and sites that pass `validate`, and why the others do not.
+    public func usable() -> (ServersFile, [String]) {
+        var problems: [String] = []
+        var kept: [ServerConfig] = []
+        for s in servers {
+            do {
+                guard !kept.contains(where: { $0.id == s.id }) else { throw ConfigError("id сервера \"\(s.id)\" повторяется") }
+                try ServersFile(servers: [s]).validate()
+                kept.append(s)
+            } catch {
+                problems.append(String(describing: error))
+            }
+        }
+        var keptSites: [SiteConfig] = []
+        for site in sites ?? [] {
+            do {
+                guard !keptSites.contains(where: { $0.id == site.id }) else { throw ConfigError("id сайта \"\(site.id)\" повторяется") }
+                try ServersFile(servers: kept, sites: [site]).validate()
+                keptSites.append(site)
+            } catch {
+                problems.append(String(describing: error))
+            }
+        }
+        return (ServersFile(servers: kept, sites: sites == nil ? nil : keptSites), problems)
+    }
+
+    private struct Lossy: Decodable {
+        var servers: [Entry<ServerConfig>]
+        var sites: [Entry<SiteConfig>]?
+    }
+
+    private struct Entry<T: Decodable>: Decodable {
+        var value: T?
+        var error: String?
+        init(from decoder: Decoder) throws {
+            do { value = try T(from: decoder) } catch { self.error = ServersFile.describe(error) }
+        }
+    }
+
+    static func describe(_ error: Error) -> String {
+        switch error as? DecodingError {
+        case .keyNotFound(let key, _): return "нет поля «\(key.stringValue)»"
+        case .typeMismatch(_, let c), .valueNotFound(_, let c): return "неверное значение поля «\(c.codingPath.last?.stringValue ?? "")»"
+        case .dataCorrupted(let c): return c.debugDescription
+        default: return String(describing: error)
+        }
+    }
+
     public func validate() throws {
         var ids = Set<String>()
         for s in servers {
@@ -267,6 +335,15 @@ public enum DataFolder {
     /// The build replaced by the last update and the database as it was then.
     public static var previousApp: URL { url.appendingPathComponent("Previous/Monitor.app", isDirectory: true) }
     public static var previousDatabase: URL { url.appendingPathComponent("Previous/monitor.sqlite") }
+    /// A database brought by an import, put in place on the next start, and
+    /// the one it replaced.
+    public static var pendingImport: URL { url.appendingPathComponent("import.sqlite") }
+    public static var beforeImport: URL { url.appendingPathComponent("Previous/monitor-before-import.sqlite") }
+    /// Daily copies of the database, one per even and odd day.
+    public static func dailyCopy(_ date: Date, calendar: Calendar = .current) -> URL {
+        let day = calendar.ordinality(of: .day, in: .era, for: date) ?? 0
+        return url.appendingPathComponent("Backups/monitor-\(day % 2 == 0 ? "even" : "odd").sqlite")
+    }
 
     /// Creates the folder (owner-only) and an example servers.json if missing.
     public static func prepare() throws {
