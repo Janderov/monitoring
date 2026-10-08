@@ -98,7 +98,10 @@ public final class AppModel: ObservableObject {
             }
             // Site logins sealed while locked reach the agents after unlock.
             await lock.setOnSecretsOpened { [unowned self] in
-                Task { @MainActor in await self.reload() }
+                Task { @MainActor in
+                    self.updates.refresh()
+                    await self.reload()
+                }
             }
         }
         await reload()
@@ -148,6 +151,8 @@ public final class AppModel: ObservableObject {
     private func noteLock(_ status: AdminLockStatus?) {
         let locked = status?.state == .locked
         lockGate.set(locked)
+        // The GitHub token is sealed: it becomes readable only after unlock.
+        updates.refresh()
         // Forms show server details; close them when the token goes.
         if locked { sheet = nil }
     }
