@@ -48,6 +48,6 @@ final class AccessTests: XCTestCase {
         XCTAssertEqual(log[0].actor.name, "Наблюдатель")
         let forKey = try await auditor.recent(objectID: "CPUB=")
         XCTAssertEqual(forKey.count, 2)
-        XCTAssertEqual(Store.schemaVersion, 8)
+        XCTAssertEqual(Store.schemaVersion, 9)
     }
 }
