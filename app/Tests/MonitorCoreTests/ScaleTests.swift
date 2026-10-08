@@ -124,7 +124,9 @@ final class ScaleTests: XCTestCase {
           {"id": "bad", "name": "Bad", "url": "ftp://example.com"}
         ]}
         """
-        let (file, problems) = try ServersFile.decodeSkipping(Data(json.utf8))
+        let (decoded, unreadable) = try ServersFile.decodeSkipping(Data(json.utf8))
+        let (file, invalid) = decoded.usable()
+        let problems = unreadable + invalid
         XCTAssertEqual(file.servers.map(\.id), ["nl"])
         XCTAssertEqual(file.sites?.map(\.id), ["shop"])
         XCTAssertEqual(problems.count, 4)
@@ -132,6 +134,39 @@ final class ScaleTests: XCTestCase {
         XCTAssertTrue(problems.contains { $0.contains("сервер ru: токен слишком короткий") })
         XCTAssertTrue(problems.contains { $0.contains("повторяется") })
         XCTAssertThrowsError(try ServersFile.decodeSkipping(Data("{".utf8)), "not JSON at all")
+    }
+
+    func testTokensFromKeychainAreNotSkipped() async throws {
+        // servers.json keeps no tokens: they are filled in before validation.
+        let dir = try tempDir()
+        let url = dir.appendingPathComponent("servers.json")
+        let fp = String(repeating: "AB", count: 32)
+        try Data("""
+        {"servers": [{"id": "nl", "name": "NL", "host": "203.0.113.10", "fingerprint": "\(fp)"},
+                     {"id": "us", "name": "US", "host": "203.0.113.11", "fingerprint": "\(fp)"}]}
+        """.utf8).write(to: url)
+        let secrets = MemorySecrets([SecretKey.agentToken("nl"): String(repeating: "c", count: 43)])
+        let (file, problems) = try await ConfigRepository(url: url, secrets: secrets).loadSkipping()
+        XCTAssertEqual(file.servers.map(\.id), ["nl"])
+        XCTAssertEqual(problems.count, 1)
+        XCTAssertTrue(problems[0].contains("сервер us: токена нет"), problems[0])
+    }
+
+    func testServerLeavingTheListKeepsHistory() async throws {
+        // A server skipped for a while (servers.json unreadable) comes back
+        // with its history; only an explicit removal deletes it.
+        let dir = try tempDir()
+        let agent = FakeAgent()
+        agent.history = [Fixtures.snapshot(time: t0)]
+        let store = try Store(path: dir.appendingPathComponent("m.sqlite").path)
+        let poller = Poller(client: AgentClient(transport: agent), store: store,
+                            onUpdate: { _ in }, onEvents: { _ in })
+        await poller.setServers([Fixtures.server])
+        await poller.pollAll(now: t0.addingTimeInterval(60))
+        await poller.setServers([])
+        await poller.setServers([Fixtures.server])
+        let kept = try await store.samples(Fixtures.server.id, from: t0.addingTimeInterval(-60), to: t0.addingTimeInterval(60))
+        XCTAssertEqual(kept.count, 1)
     }
 
     func testPBKDF2() {

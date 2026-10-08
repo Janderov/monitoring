@@ -196,9 +196,9 @@ public struct ServersFile: Codable, Sendable {
         return try d.decode(ServersFile.self, from: data)
     }
 
-    /// For monitoring: an entry that cannot be read or is invalid is left
-    /// out with the reason, and the others are watched. Only a file that is
-    /// not JSON at all stops everything.
+    /// For monitoring: an entry that cannot be read is left out with the
+    /// reason, and the others are read. Only a file that is not JSON at all
+    /// stops everything.
     public static func decodeSkipping(_ data: Data) throws -> (file: ServersFile, problems: [String]) {
         let d = JSONDecoder()
         d.keyDecodingStrategy = .convertFromSnakeCase
@@ -212,8 +212,9 @@ public struct ServersFile: Codable, Sendable {
         for (i, e) in (raw.sites ?? []).enumerated() {
             if let s = e.value { sites.append(s) } else { problems.append("сайт №\(i + 1): \(e.error ?? "")") }
         }
-        let (file, invalid) = ServersFile(servers: servers, sites: raw.sites == nil ? nil : sites).usable()
-        return (file, problems + invalid)
+        // Validation (`usable`) comes after the tokens are filled in from
+        // the secret store: the file itself has none.
+        return (ServersFile(servers: servers, sites: raw.sites == nil ? nil : sites), problems)
     }
 
     /// The servers and sites that pass `validate`, and why the others do not.

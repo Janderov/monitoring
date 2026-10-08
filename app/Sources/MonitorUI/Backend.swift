@@ -221,6 +221,7 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
         _ = try await audited(.editConfig, on: ref, detail: "удалён") { [config] in
             try await config.removeServer(id: id)
         }
+        try? await store?.forget(serverID: id)
         try await reload()
     }
 
