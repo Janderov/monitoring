@@ -27,14 +27,8 @@ struct MonitorApp: App {
         .defaultSize(width: 1180, height: 760)
         .commands {
             MonitorCommands(model: model)
-            CommandGroup(replacing: .appSettings) { SettingsCommand() }
+            CommandGroup(replacing: .appSettings) { SettingsCommand(model: model) }
         }
-
-        Window("Настройки", id: SettingsView.id) {
-            SettingsView(model: model)
-                .background(ReopenHook())
-        }
-        .windowResizability(.contentSize)
 
         Window("Мини-панель", id: MiniPanel.id) {
             MiniPanel(model: model)
@@ -80,14 +74,16 @@ private struct ReopenHook: View {
     }
 }
 
-/// ⌘, opens the settings window.
+/// ⌘, opens settings in the main window.
 private struct SettingsCommand: View {
+    @ObservedObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Button("Настройки…") {
+            model.showSettings()
             NSApp.activate(ignoringOtherApps: true)
-            openWindow(id: SettingsView.id)
+            openWindow(id: MainWindow.id)
         }
         .keyboardShortcut(",")
     }

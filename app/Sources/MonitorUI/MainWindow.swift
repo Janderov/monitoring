@@ -5,7 +5,6 @@ import SwiftUI
 
 /// The main window: sidebar with sections, groups and tags; content on the right.
 public struct MainWindow: View {
-    @Environment(\.openWindow) private var openWindow
     public static let id = "main"
     @ObservedObject var model: AppModel
     @State private var columns: NavigationSplitViewVisibility = .automatic
@@ -56,7 +55,7 @@ public struct MainWindow: View {
                             }
                             .help("Обновить агентов на всех серверах")
                         }
-                        Button { openWindow(id: SettingsView.id) } label: {
+                        Button { model.showSettings() } label: {
                             Label("Настройки", systemImage: "gearshape")
                         }
                         .help("Настройки: обновления, токен GitHub, журнал действий")
@@ -75,6 +74,7 @@ public struct MainWindow: View {
         case .sites: SitesScreen(model: model)
         case .vpn: VPNScreen(model: model)
         case .journal: JournalView(model: model)
+        case .settings: SettingsView(model: model, embedded: true)
         }
     }
 }
@@ -92,6 +92,9 @@ private struct Sidebar: View {
                 row(.sites, "Сайты", "globe", count: model.sites.count)
                 row(.vpn, "VPN", "lock.shield", count: vpnClients)
                 row(.journal, "Журнал", "list.bullet.rectangle")
+            }
+            Section {
+                row(.settings, "Настройки", "gearshape")
             }
             if !model.groups.isEmpty {
                 Section("Группы") {

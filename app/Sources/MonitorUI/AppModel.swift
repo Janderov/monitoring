@@ -10,8 +10,10 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var statuses: [ServerStatus] = []
     @Published public private(set) var siteStatuses: [SiteStatus] = []
     @Published public private(set) var configError: String?
-    /// Time of the last finished polling round, for "опрос 12 с назад".
+    /// Time of the last screen update; views reload their data on it.
     @Published public private(set) var lastRound: Date?
+    /// Whether the Mac itself manages to poll (network, database).
+    @Published public private(set) var health = PollerHealth()
 
     /// Navigation shared by the main window and the menu bar ("open this server").
     @Published public var section: AppSection = .overview
@@ -55,14 +57,22 @@ public final class AppModel: ObservableObject {
     /// Traffic of every VPN peer, from the counters in consecutive snapshots.
     @Published public private(set) var peerRates = RateMeter()
 
+    /// When the data shown was last fresh, for "опрос 12 с назад". While the
+    /// Mac cannot poll it stays at the last round that worked.
+    public var lastPolled: Date? { health.problem == nil ? lastRound : health.lastGoodRound }
+
+    /// The menu bar icon: grey while the monitoring itself does not work,
+    /// since then green would only be an old picture.
     public var overall: ServerStatus.Level {
+        if health.problem != nil { return .unknown }
         if configError != nil { return .warning }
-        return statuses.map(\.level).max() ?? .unknown
+        return (statuses.map(\.level) + siteStatuses.map(\.level).filter { $0 > .ok }).max() ?? .unknown
     }
 
-    /// Problems across all servers, worst and oldest first.
+    /// Problems across all servers and sites, worst and oldest first.
     public var problems: [Problem] {
-        statuses.flatMap { s in s.alerts.map { Problem(status: s, alert: $0) } }
+        (statuses.flatMap { s in s.alerts.map { Problem(server: s, alert: $0) } }
+            + siteStatuses.flatMap { s in s.alerts.map { Problem(site: s, alert: $0) } })
             .sorted { ($0.alert.severity, $1.alert.since) > ($1.alert.severity, $0.alert.since) }
     }
 
@@ -105,6 +115,8 @@ public final class AppModel: ObservableObject {
                 }
             }, onSites: { [unowned self] list in
                 Task { @MainActor in self.siteStatuses = list }
+            }, onHealth: { [unowned self] h in
+                Task { @MainActor in self.health = h }
             })
         } catch {
             configError = "Не удалось открыть данные: \(describe(error))"
@@ -128,6 +140,7 @@ public final class AppModel: ObservableObject {
             }
         }
         await reload()
+        Background.start(self)
         Task { await MorningDigest.checkLoop(self) }
     }
 
@@ -185,24 +198,77 @@ public final class AppModel: ObservableObject {
         Task { await backend.adminLock?.lock() }
     }
 
+    /// Settings open as a section of the main window.
+    public func showSettings() {
+        filter = nil
+        section = .settings
+    }
+
     public func status(_ id: String) -> ServerStatus? { statuses.first { $0.id == id } }
 
     // MARK: Actions
 
-    /// Opens Terminal with an SSH session (Terminal handles ssh:// links).
+    /// Opens Terminal with an SSH session, with the server's saved SSH user,
+    /// port and key (or its ~/.ssh/config block). When this network closes
+    /// the server's SSH port, the session goes through another of our servers
+    /// that is reachable, and Terminal says so.
     public func openSSH(_ server: ServerConfig) {
         guard can(.ssh, server) else { return }
-        let user = server.ssh?.user ?? UserDefaults.standard.string(forKey: "sshUser.\(server.id)")
-            ?? UserDefaults.standard.string(forKey: "sshUser.default") ?? "root"
-        var c = URLComponents()
-        c.scheme = "ssh"
-        c.user = user
-        c.host = server.host
-        c.port = server.ssh?.port.flatMap { $0 == 22 ? nil : $0 }
-        guard let url = c.url else { return }
-        NSWorkspace.shared.open(url)
+        let config = SSHConfigFile.entries()
+        let target = sshTarget(server, config: config)
+        // Servers whose agent reaches this one go first.
+        let rest = statuses.filter { $0.id != server.id }
+        let reaching = rest.filter { s in s.snapshot?.checks?.contains { $0.id == server.peerCheckID && $0.ok } == true }
+        let others = (reaching + rest.filter { s in !reaching.contains { $0.id == s.id } })
+            .map { (status: $0, target: sshTarget($0.server, config: config)) }
+        let port = { (t: SSHTarget) in t.port ?? config.first { $0.alias == t.host }?.port ?? 22 }
         let backend = backend
-        Task { _ = try? await backend.audited(.ssh, on: .server(server), detail: "\(user)@\(server.host)") {} }
+        Task {
+            var jump: (name: String, target: SSHTarget)?
+            let direct = await Self.reachable(server.host, port(target))
+            if !direct {
+                for o in others {
+                    if await Self.reachable(o.status.server.host, port(o.target)) {
+                        jump = (o.status.server.name, o.target)
+                        break
+                    }
+                }
+            }
+            var lines = ["clear"]
+            if let jump {
+                lines.append("echo " + TerminalSSH.quote("Из этой сети порт SSH сервера «\(server.name)» закрыт, захожу через «\(jump.name)»."))
+            }
+            if !direct, jump == nil {
+                lines.append("echo " + TerminalSSH.quote("Порт SSH сервера «\(server.name)» не отвечает из этой сети, а обойти через другой сервер не получилось. Пробую напрямую."))
+            }
+            lines.append("exec " + TerminalSSH.command(target, jump: jump?.target))
+            Self.runInTerminal(lines, name: "ssh-\(server.id)")
+            let how = jump.map { " через \($0.name)" } ?? ""
+            _ = try? await backend.audited(.ssh, on: .server(server), detail: "\(target.user ?? "")@\(target.host)\(how)") {}
+        }
+    }
+
+    private func sshTarget(_ server: ServerConfig, config: [SSHConfigEntry]) -> SSHTarget {
+        let d = UserDefaults.standard
+        let user = d.string(forKey: "sshUser.\(server.id)") ?? d.string(forKey: "sshUser.default") ?? "root"
+        return TerminalSSH.target(for: server, user: user, config: config)
+    }
+
+    private nonisolated static func reachable(_ host: String, _ port: Int) async -> Bool {
+        await Task.detached { MacProbeModel.connectTime(host: host, port: port, timeout: 3) != nil }.value
+    }
+
+    /// A .command file opens in Terminal, which needs no permission to
+    /// control other apps. It lives in this user's private temporary folder.
+    private static func runInTerminal(_ lines: [String], name: String) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name + ".command")
+        let text = "#!/bin/zsh\n" + lines.joined(separator: "\n") + "\n"
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        } catch { return }
+        let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+        NSWorkspace.shared.open([url], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration())
     }
 
     public func copyAddress(_ server: ServerConfig) {
@@ -275,7 +341,7 @@ public enum EditSheet: Identifiable, Hashable, Sendable {
 }
 
 public enum AppSection: Hashable, Sendable {
-    case overview, map, problems, servers, sites, vpn, journal
+    case overview, map, problems, servers, sites, vpn, journal, settings
 }
 
 public enum Filter: Hashable, Sendable {
@@ -303,12 +369,35 @@ extension AppModel {
         section = .servers
         selectedServerID = id
     }
+
+    public func show(site id: String) {
+        section = .sites
+        selectedSiteID = id
+    }
+
+    /// Opens the server or site a problem belongs to.
+    public func show(_ p: Problem) {
+        if let s = p.server { show(server: s.id) } else if let id = p.siteID { show(site: id) }
+    }
 }
 
+/// One active alert of a server or a site.
 public struct Problem: Identifiable, Sendable {
-    public var status: ServerStatus
+    /// Set for a server's alert.
+    public var server: ServerConfig?
+    /// Set for a site's alert.
+    public var siteID: String?
+    public var name: String
     public var alert: ActiveAlert
-    public var id: String { "\(status.id)|\(alert.key)" }
+    public var id: String { "\(server.map { $0.id } ?? SiteStatus.alertID(siteID ?? ""))|\(alert.key)" }
+
+    public init(server s: ServerStatus, alert: ActiveAlert) {
+        server = s.server; name = s.server.name; self.alert = alert
+    }
+
+    public init(site s: SiteStatus, alert: ActiveAlert) {
+        siteID = s.site.id; name = s.site.name; self.alert = alert
+    }
 }
 /// Whether the app is locked, for code that runs off the main thread.
 final class LockGate: @unchecked Sendable {

@@ -7,9 +7,11 @@ import MonitorCore
 /// implements the same protocol and the screens stay as they are.
 public protocol MonitorBackend: AnyObject, Sendable {
     /// Opens the data and starts polling; `onUpdate` and `onSites` receive the
-    /// full lists after every round. The lists themselves are loaded by `reload`.
+    /// full lists after every round, `onHealth` whether polling itself works.
+    /// The lists themselves are loaded by `reload`.
     func start(onUpdate: @escaping @Sendable ([ServerStatus]) -> Void,
-               onSites: @escaping @Sendable ([SiteStatus]) -> Void) async throws
+               onSites: @escaping @Sendable ([SiteStatus]) -> Void,
+               onHealth: @escaping @Sendable (PollerHealth) -> Void) async throws
     /// Re-reads the server list and polls right away.
     func reload() async throws
     func pollNow() async
@@ -95,7 +97,8 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
     }
 
     public func start(onUpdate: @escaping @Sendable ([ServerStatus]) -> Void,
-                      onSites: @escaping @Sendable ([SiteStatus]) -> Void) async throws {
+                      onSites: @escaping @Sendable ([SiteStatus]) -> Void,
+                      onHealth: @escaping @Sendable (PollerHealth) -> Void) async throws {
         try DataFolder.prepare()
         let store = try Store(path: DataFolder.database.path)
         let poller = Poller(client: AgentClient(transport: PinnedTransport()), store: store,
@@ -108,6 +111,7 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
         // Locks again when the token is pulled out or after 15 idle minutes.
         await lock.startWatching()
         await poller.setSitesHandler(onSites)
+        await poller.setHealthHandler(onHealth)
         let saved = UserDefaults.standard.double(forKey: Poller.refreshDefaultsKey)
         if saved > 0 { await poller.setRefreshInterval(saved) }
         await poller.start()

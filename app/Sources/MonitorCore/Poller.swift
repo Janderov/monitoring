@@ -26,6 +26,28 @@ public struct ServerStatus: Equatable, Identifiable, Sendable {
     }
 }
 
+/// Whether the Mac itself manages to poll. While it does not, the screens
+/// must not present the last known state as current.
+public struct PollerHealth: Equatable, Sendable {
+    /// The last full round that reached the agents and saved its data.
+    public var lastGoodRound: Date?
+    /// No agent answered: the Mac has no network (or has just woken up).
+    public var macOffline = false
+    /// The database could not be written in the last round.
+    public var storeError: String?
+
+    public init(lastGoodRound: Date? = nil, macOffline: Bool = false, storeError: String? = nil) {
+        self.lastGoodRound = lastGoodRound; self.macOffline = macOffline; self.storeError = storeError
+    }
+
+    /// What is wrong with the monitoring itself, nil when it works.
+    public var problem: String? {
+        if let storeError { return "не удаётся записать данные: \(storeError)" }
+        if macOffline { return "ни один сервер не отвечает Маку, похоже, нет сети" }
+        return nil
+    }
+}
+
 /// Polls every agent once a minute: pulls the history missed since the last
 /// stored sample (up to the agent's 24 h buffer), stores it, evaluates alert
 /// rules on the fresh snapshot and reports notifications. With a shorter
@@ -64,6 +86,14 @@ public actor Poller {
     private let domains: DomainExpiry
     private var domainsLoaded = false
     private var onSites: (@Sendable ([SiteStatus]) -> Void)?
+    private var onHealth: (@Sendable (PollerHealth) -> Void)?
+    private var health = PollerHealth()
+    /// The full round in progress; another caller waits for it to finish.
+    private var round: Task<Void, Never>?
+    /// Alerts in progress and the last good round, read back from the database once.
+    private var restored = false
+    static let alertsKey = "alerts"
+    static let lastRoundKey = "lastGoodRound"
 
     private let onUpdate: @Sendable ([ServerStatus]) -> Void
     private let onEvents: @Sendable ([AlertEvent]) -> Void
@@ -84,6 +114,14 @@ public actor Poller {
         onSites = handler
         handler(orderedSites())
     }
+
+    /// Receives the state of the monitoring itself after each full round.
+    public func setHealthHandler(_ handler: @escaping @Sendable (PollerHealth) -> Void) {
+        onHealth = handler
+        handler(health)
+    }
+
+    public func currentHealth() -> PollerHealth { health }
 
     /// Replaces the site list. The agents get the new check targets on the next round.
     public func setSites(_ list: [SiteConfig]) {
@@ -247,8 +285,33 @@ public actor Poller {
                 .map { CheckTarget.tcp($0.peerCheckID, host: $0.host, port: $0.port) }
     }
 
-    /// One round over all servers, in parallel.
+    /// One round over all servers, in parallel. Rounds never overlap: a call
+    /// made while one runs (a button, a config change, waking up) waits for it
+    /// and then runs its own, so it sees the latest settings.
     public func pollAll(now: Date) async {
+        while let running = round { await running.value }
+        let task = Task { await self.runRound(now: now) }
+        round = task
+        await task.value
+        round = nil
+    }
+
+    /// Reads back what the previous run of the app left: alerts in progress
+    /// are not announced again as new, and the pause can be summed up.
+    private func restore() async {
+        // The first rounds can run before the config is loaded: wait for it,
+        // or the saved alerts would be dropped as belonging to no server.
+        guard !restored, !servers.isEmpty || !sites.isEmpty else { return }
+        restored = true
+        if let saved = try? await store.value(Poller.alertsKey) { engine.restore(Data(saved.utf8)) }
+        engine.retain(serverIDs: Set(servers.map(\.id)).union(sites.map { SiteStatus.alertID($0.id) }))
+        if let saved = try? await store.value(Poller.lastRoundKey), let t = Double(saved) {
+            health.lastGoodRound = Date(timeIntervalSince1970: t)
+        }
+    }
+
+    private func runRound(now: Date) async {
+        await restore()
         lastFullRound = now
         let list = servers
         let wantInterval = Int(refresh)
@@ -276,11 +339,15 @@ public actor Poller {
         let macOffline = !results.isEmpty && results.allSatisfy { $0.1.snapshot == nil }
             && (results.count >= 2 || results.allSatisfy { $0.1.offline })
         self.macOffline = macOffline
+        var storeError = results.compactMap(\.1.storeError).first
+        func failed(_ error: Error) { if storeError == nil { storeError = Poller.describe(error) } }
 
         var events: [AlertEvent] = []
         for (s, r) in results {
             if let pushed = r.pushed { pushedTargets[s.id] = pushed }
-            if !macOffline { try? await store.addPoll(s.id, at: now, ok: r.snapshot != nil, error: r.error) }
+            if !macOffline {
+                do { try await store.addPoll(s.id, at: now, ok: r.snapshot != nil, error: r.error) } catch { failed(error) }
+            }
             let outcome: PollOutcome = r.snapshot.map { .snapshot($0) } ?? .failure(r.error ?? "нет ответа")
             // A server rebooting on request is expected to be silent for a while.
             let expectedSilence = r.snapshot == nil && rebooting[s.id] != nil
@@ -304,10 +371,39 @@ public actor Poller {
         try? await store.rollup(since: min(oldest, now.addingTimeInterval(-2 * 3600)), now: now)
         events += await evaluateSites(fresh: Set(results.filter { $0.1.snapshot != nil }.map(\.0.id)),
                                       macOffline: macOffline, now: now)
+
+        if !macOffline && restored {
+            if let away = await summarizePause(results, now: now) { events.append(away) }
+            if let data = engine.saved() {
+                do { try await store.setValue(String(decoding: data, as: UTF8.self), for: Poller.alertsKey) } catch { failed(error) }
+            }
+            if storeError == nil {
+                health.lastGoodRound = now
+                try? await store.setValue(String(now.timeIntervalSince1970), for: Poller.lastRoundKey)
+            }
+        }
+        health.macOffline = macOffline
+        health.storeError = storeError
+        onHealth?(health)
+
         publish()
         publishSites()
         if !events.isEmpty { onEvents(events) }
         await refreshDomains(now: now)
+    }
+
+    /// After a pause of `AwaySummary.minimumGap` or more (the Mac slept, was
+    /// off or offline), one journal entry about what happened meanwhile; it
+    /// is returned for a notification only when something did.
+    private func summarizePause(_ results: [(ServerConfig, PollResult)], now: Date) async -> AlertEvent? {
+        guard let last = health.lastGoodRound, now.timeIntervalSince(last) >= AwaySummary.minimumGap else { return nil }
+        let seen = results.filter { $0.1.snapshot != nil }.map {
+            AwaySummary.Seen(server: $0.0, before: $0.1.before, samples: $0.1.samples)
+        }
+        let lines = AwaySummary.lines(from: last, seen: seen, sites: sites)
+        let event = AwaySummary.event(from: last, to: now, lines: lines)
+        try? await store.addEvent(event)
+        return lines.isEmpty ? nil : event
     }
 
     /// Builds each site's status from the agents that answered this round and,
@@ -376,18 +472,24 @@ public actor Poller {
         var oldestNew: Date?
         /// Check targets the agent accepted in this poll.
         var pushed: [CheckTarget]?
+        /// The agent answered, but saving its data failed.
+        var storeError: String?
+        /// The last snapshot stored before this poll, and the ones it brought.
+        var before: Snapshot?
+        var samples: [Snapshot] = []
     }
 
     static func poll(_ s: ServerConfig, client: AgentClient, store: Store, push: [CheckTarget]? = nil,
                      interval: Int? = nil, now: Date) async -> PollResult {
+        // First everything from the agent, then the database: a database
+        // that cannot be written must not make a healthy server look down.
+        let history: [Snapshot]
+        let snap: Snapshot
+        var pushed: [CheckTarget]?
         do {
             let since = (try? await store.lastSampleTime(s.id)) ?? now.addingTimeInterval(-firstBackfill)
-            let history = try await client.history(s, since: since)
-            try await store.addSamples(s.id, history)
-            try await store.addSiteSamples(serverID: s.id, history)
-            try await store.addLinkSamples(serverID: s.id, history)
+            history = try await client.history(s, since: since)
             // A failed push is retried next round; it must not hide the server's metrics.
-            var pushed: [CheckTarget]?
             if let push {
                 if (try? await client.setChecks(s, targets: push)) != nil {
                     pushed = push
@@ -398,28 +500,40 @@ public actor Poller {
                     if (try? await client.setChecks(s, targets: plain)) != nil { pushed = plain }
                 }
             }
-            let snap = try await client.snapshot(s)
-            // Reboots and container changes since the last round, including
-            // those inside the backfilled history.
-            let previous = (try? await store.latest(s.id)) ?? nil
-            for e in ServerEvents.changes(serverID: s.id, serverName: s.name, previous: previous,
-                                          snapshots: history + [snap]) {
-                // A container stuck restarting would flood the log: a few
-                // entries an hour per container are enough to see it.
-                let recent = (try? await store.eventCount(s.id, key: e.key, since: e.time.addingTimeInterval(-3600))) ?? 0
-                if recent < ServerEvents.maxPerHour { try? await store.addEvent(e) }
-            }
-            try await store.setLatest(s.id, snap)
-            try? await store.addVPNTraffic(s.id, snap)
-            // Older agents report no interval and have no settings to change.
-            if let interval, let current = snap.intervalS, current != interval {
-                try? await client.setInterval(s, seconds: interval)
-            }
-            return PollResult(snapshot: snap, error: nil, oldestNew: history.first?.time, pushed: pushed)
+            snap = try await client.snapshot(s)
         } catch {
             let offline = (error as? URLError)?.code == .notConnectedToInternet
             return PollResult(snapshot: nil, error: describe(error), offline: offline)
         }
+
+        var storeError: String?
+        do {
+            try await store.addSamples(s.id, history)
+            try await store.addSiteSamples(serverID: s.id, history)
+            try await store.addLinkSamples(serverID: s.id, history)
+        } catch {
+            storeError = describe(error)
+        }
+        // Reboots and container changes since the last round, including
+        // those inside the backfilled history.
+        let previous = (try? await store.latest(s.id)) ?? nil
+        for e in ServerEvents.changes(serverID: s.id, serverName: s.name, previous: previous,
+                                      snapshots: history + [snap]) {
+            // A container stuck restarting would flood the log: a few
+            // entries an hour per container are enough to see it.
+            let recent = (try? await store.eventCount(s.id, key: e.key, since: e.time.addingTimeInterval(-3600))) ?? 0
+            if recent < ServerEvents.maxPerHour { try? await store.addEvent(e) }
+        }
+        do { try await store.setLatest(s.id, snap) } catch { storeError = storeError ?? describe(error) }
+        try? await store.addVPNTraffic(s.id, snap)
+        // Older agents report no interval and have no settings to change.
+        if let interval, let current = snap.intervalS, current != interval {
+            try? await client.setInterval(s, seconds: interval)
+        }
+        // The snapshot is usually the newest history sample again.
+        let samples = history.last.map { $0.time >= snap.time } == true ? history : history + [snap]
+        return PollResult(snapshot: snap, error: nil, oldestNew: history.first?.time, pushed: pushed,
+                          storeError: storeError, before: previous, samples: samples)
     }
 
     static func describe(_ error: Error) -> String {

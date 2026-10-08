@@ -301,3 +301,45 @@ public final class ProcessSSH: SSHRunner, @unchecked Sendable {
         func values() -> (Data, Data) { lock.withLock { (out, err) } }
     }
 }
+
+// MARK: - SSH in Terminal
+
+/// The `ssh` command the SSH button runs in Terminal.
+public enum TerminalSSH {
+    /// Where to log in to a server: its saved SSH settings, else a
+    /// ~/.ssh/config block for its address (so the key named there is used),
+    /// else the address itself. `user` fills in a missing login name.
+    public static func target(for server: ServerConfig, user: String, config: [SSHConfigEntry]) -> SSHTarget {
+        if var t = server.ssh {
+            if t.user?.isEmpty ?? true, !hasUser(t.host, config) { t.user = user }
+            return t
+        }
+        if let e = config.first(where: { $0.hostName == server.host || $0.alias == server.host }) {
+            return SSHTarget(host: e.alias, user: e.user == nil ? user : nil)
+        }
+        return SSHTarget(host: server.host, user: user)
+    }
+
+    private static func hasUser(_ host: String, _ config: [SSHConfigEntry]) -> Bool {
+        config.contains { $0.alias == host && $0.user != nil }
+    }
+
+    /// `ssh … host`, shell-quoted; through `jump` (logging in there with its
+    /// own settings) when the server's SSH port is closed on this network.
+    public static func command(_ target: SSHTarget, jump: SSHTarget? = nil) -> String {
+        var args = ["ssh"] + target.options()
+        if let jump {
+            let inner = (["ssh"] + jump.options() + ["-W", "%h:%p", jump.host]).map(quote).joined(separator: " ")
+            args += ["-o", "ProxyCommand=" + inner]
+        }
+        args.append(target.host)
+        return args.map(quote).joined(separator: " ")
+    }
+
+    /// Single quotes unless the word is plainly safe.
+    public static func quote(_ s: String) -> String {
+        let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.,/:=@%+")
+        if !s.isEmpty, s.unicodeScalars.allSatisfy({ safe.contains($0) }) { return s }
+        return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+}

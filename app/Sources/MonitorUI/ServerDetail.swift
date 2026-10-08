@@ -64,9 +64,14 @@ struct ServerDetail: View {
                 }
                 facts
                 // A segmented control cannot shrink below its labels, so a
-                // narrow pane gets a pop-up menu instead of clipping.
+                // narrow pane gets two rows of it, and only a very narrow one
+                // a pop-up menu.
                 ViewThatFits(in: .horizontal) {
                     tabPicker.pickerStyle(.segmented).fixedSize()
+                    VStack(alignment: .leading, spacing: 6) {
+                        tabRow(Array(Tab.allCases.prefix(5)))
+                        tabRow(Array(Tab.allCases.dropFirst(5)))
+                    }
                     tabPicker.pickerStyle(.menu).fixedSize()
                 }
                 if tab == .metrics {
@@ -85,6 +90,18 @@ struct ServerDetail: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// One row of the two-row tab bar; shows no selection while the chosen
+    /// tab is in the other row.
+    private func tabRow(_ tabs: [Tab]) -> some View {
+        Picker("Раздел", selection: Binding<Tab?>(get: { tabs.contains(tab) ? tab : nil },
+                                                 set: { if let t = $0 { tab = t } })) {
+            ForEach(tabs) { t in Text(t.rawValue).tag(Optional(t)) }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .fixedSize()
     }
 
     private var tabPicker: some View {

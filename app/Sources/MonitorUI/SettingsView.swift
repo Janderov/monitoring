@@ -2,15 +2,19 @@
 import MonitorCore
 import SwiftUI
 
-/// The app's Settings window (⌘,). A plain window rather than the SwiftUI
-/// Settings scene: a menu bar app has no app menu, and on macOS 14+ the
-/// Settings scene cannot be opened from code without SettingsLink.
+/// The app's settings (⌘,), a section of the main window like the others, so
+/// they open where the window is, full screen included.
 public struct SettingsView: View {
-    public static let id = "settings"
-
     @ObservedObject var model: AppModel
+    /// Shown in the main window's detail pane.
+    var embedded = false
 
     public init(model: AppModel) { self.model = model }
+
+    init(model: AppModel, embedded: Bool) {
+        self.model = model
+        self.embedded = embedded
+    }
 
     public var body: some View {
         if model.showsLockScreen {
@@ -31,7 +35,10 @@ public struct SettingsView: View {
             AdminKeySettings(model: model)
                 .tabItem { Label("Ключ администратора", systemImage: "key") }
         }
-        .frame(width: 520)
+        .frame(maxWidth: embedded ? 680 : 520)
+        .padding(embedded ? 20 : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .navigationTitle("Настройки")
     }
 }
 
@@ -43,9 +50,22 @@ private struct GeneralSettings: View {
     @AppStorage("digest.enabled") private var digest = true
     @AppStorage("digest.hour") private var digestHour = 9
     @Environment(\.openWindow) private var openWindow
+    @State private var launch = false
+    @State private var launchError: String?
 
     var body: some View {
         Form {
+            Section("Запуск") {
+                Toggle("Открывать при входе в систему", isOn: Binding(get: { launch }, set: { on in
+                    launchError = Background.setLaunchAtLogin(on)
+                    launch = Background.launchAtLogin
+                }))
+                Text("Проверки идут, пока приложение открыто. После сна Мак сразу опрашивает серверы, а если за паузу что-то случилось, присылает сводку.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let launchError {
+                    Text(launchError).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Section("Серверы") {
                 LabeledContent("Список серверов") {
                     HStack {
@@ -98,6 +118,7 @@ private struct GeneralSettings: View {
         }
         .formStyle(.grouped)
         .frame(minHeight: 360)
+        .onAppear { launch = Background.launchAtLogin }
     }
 
     /// The database with its write-ahead log, which holds the newest pages.

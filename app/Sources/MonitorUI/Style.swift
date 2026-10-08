@@ -74,6 +74,19 @@ struct StatusBadge: View {
     }
 }
 
+/// Shown while the Mac itself cannot poll: what is shown is an old picture.
+struct HealthStrip: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        if let problem = model.health.problem {
+            AlertStrip(level: .unknown,
+                       text: "Мониторинг не работает: \(problem). Цвета показывают последнее известное состояние.",
+                       trailing: model.health.lastGoodRound.map { "данные на \(Fmt.time($0))" })
+        }
+    }
+}
+
 /// A one-line warning or error strip under a header.
 struct AlertStrip: View {
     var level: ServerStatus.Level

@@ -530,7 +530,12 @@ struct EventsList: View {
         case .fired: return e.severity == .critical ? "Критично" : "Внимание"
         case .reminder: return "Напоминание"
         case .resolved: return "Снова в норме"
-        case .info: return e.key == "reboot" ? "Перезагрузка" : "Контейнер"
+        case .info:
+            switch e.key {
+            case "reboot": return "Перезагрузка"
+            case AwaySummary.key: return "Пауза Мака"
+            default: return "Контейнер"
+            }
         }
     }
 }

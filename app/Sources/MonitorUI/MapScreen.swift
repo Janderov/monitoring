@@ -40,6 +40,7 @@ struct MapScreen: View {
     @AppStorage("map.load.v2") private var showLoad = false
     @AppStorage("map.macChecks.v2") private var showMacChecks = false
     @AppStorage("map.soon") private var showSoon = true
+    @State private var showLayers = false
 
     init(model: AppModel) {
         self.model = model
@@ -259,35 +260,45 @@ struct MapScreen: View {
         }
     }
 
-    /// Every layer in one menu instead of checkboxes over the map.
+    /// Every layer in one panel instead of checkboxes over the map. A popover
+    /// rather than a menu: it stays open while several layers are switched.
     private var layersMenu: some View {
-        Menu {
-            Section("Пути") {
-                Toggle("Связи и задержки", isOn: $showLinks)
-                Toggle("Маршруты VPN", isOn: $showRoutes)
-                if showRoutes, model.routes.isEmpty, noRoutesReason != nil {
-                    Text("Каскадов не видно. Если они есть, нажмите «Обновить агентов»")
-                }
-                Toggle("Трафик на линиях", isOn: $showTraffic)
-                Toggle("Этот Mac", isOn: $showMac)
-                Toggle("Проверка с этого Mac", isOn: $showMacChecks).disabled(!showMac)
-            }
-            Section("Люди и сайты") {
-                Toggle("Клиенты VPN", isOn: $showClients)
-                Toggle("Клиенты по городам", isOn: $clientsByCity).disabled(!showClients)
-                Toggle("Сайты", isOn: $showSites)
-                Toggle("Чужие узлы", isOn: $showExternal)
-            }
-            Section("На булавках") {
-                Toggle("Загрузка процессора", isOn: $showLoad)
-                Toggle("Значок «скоро»", isOn: $showSoon)
-            }
-            Divider()
-            Toggle("Только проблемы", isOn: $onlyProblems)
-        } label: {
+        Button { showLayers.toggle() } label: {
             Label("Слои", systemImage: "square.3.layers.3d")
         }
         .help("Что показывать на карте")
+        .popover(isPresented: $showLayers, arrowEdge: .bottom) { layersPanel }
+    }
+
+    private var layersPanel: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            PanelCaption(text: "Пути")
+            Toggle("Связи и задержки", isOn: $showLinks)
+            Toggle("Маршруты VPN", isOn: $showRoutes)
+            if showRoutes, model.routes.isEmpty, noRoutesReason != nil {
+                Text("Каскадов не видно. Если они есть, нажмите «Обновить агентов»")
+                    .font(.caption).foregroundStyle(.secondary).padding(.leading, 20)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Toggle("Трафик на линиях", isOn: $showTraffic)
+            Toggle("Этот Mac", isOn: $showMac)
+            Toggle("Проверка с этого Mac", isOn: $showMacChecks).disabled(!showMac).padding(.leading, 20)
+            Divider().padding(.vertical, 3)
+            PanelCaption(text: "Люди и сайты")
+            Toggle("Клиенты VPN", isOn: $showClients)
+            Toggle("Клиенты по городам", isOn: $clientsByCity).disabled(!showClients).padding(.leading, 20)
+            Toggle("Сайты", isOn: $showSites)
+            Toggle("Чужие узлы", isOn: $showExternal)
+            Divider().padding(.vertical, 3)
+            PanelCaption(text: "На булавках")
+            Toggle("Загрузка процессора", isOn: $showLoad)
+            Toggle("Значок «скоро»", isOn: $showSoon)
+            Divider().padding(.vertical, 3)
+            Toggle("Только проблемы", isOn: $onlyProblems)
+        }
+        .toggleStyle(.checkbox)
+        .padding(14)
+        .frame(width: 280, alignment: .leading)
     }
 
     /// Draws the map with its pins and lines into a picture: copied, or saved

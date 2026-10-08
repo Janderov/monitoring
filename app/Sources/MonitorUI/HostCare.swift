@@ -372,6 +372,7 @@ public struct MiniPanel: View {
 
     private var headline: String {
         if model.showsLockScreen { return "Монитор" }
+        if model.health.problem != nil { return "Мониторинг не работает" }
         let n = model.problems.count
         return n == 0 ? "Всё в порядке" : "Проблем: \(n)"
     }
