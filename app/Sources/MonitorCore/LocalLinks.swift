@@ -14,6 +14,17 @@ public struct MacLink: Hashable, Sendable {
     /// This Mac's addresses the connections leave from; a VPN tunnel
     /// address means they go through that VPN server first.
     public var localIPs: [String] = []
+    /// Bytes received and sent so far by each connection, keyed by its local
+    /// address and port; empty when netstat prints no byte columns.
+    public var counters: [String: ByteCounter] = [:]
+}
+
+/// Running byte counters of one connection or interface.
+public struct ByteCounter: Hashable, Sendable {
+    public var rx: UInt64
+    public var tx: UInt64
+
+    public init(rx: UInt64, tx: UInt64) { self.rx = rx; self.tx = tx }
 }
 
 /// This Mac's traffic to one of our servers, either straight or through
@@ -79,6 +90,10 @@ public enum LocalLinks {
             let p = isTCP ? "tcp" : "udp"
             if !l.protos.contains(p) { l.protos.append(p); l.protos.sort() }
             l.connections += 1
+            if let rx = column("rxbytes", rest, restHeader).flatMap(UInt64.init),
+               let tx = column("txbytes", rest, restHeader).flatMap(UInt64.init) {
+                l.counters[p + " " + t[3]] = ByteCounter(rx: rx, tx: tx)
+            }
             agg[key] = l
         }
         return agg.values.sorted { ($0.connections, $1.remoteIP) > ($1.connections, $0.remoteIP) }
@@ -229,6 +244,11 @@ public enum LocalLinks {
             return (n.isEmpty ? nil : n, Int32(v[v.index(after: c)...]))
         }
         return (nil, Int32(v))
+    }
+
+    private static func column(_ name: String, _ rest: [String], _ header: [String]) -> String? {
+        guard let i = header.firstIndex(of: name), i < rest.count else { return nil }
+        return rest[i]
     }
 
     private static func isState(_ s: String) -> Bool {

@@ -37,6 +37,12 @@ public final class AppModel: ObservableObject {
     public let mac = MacLinksModel()
     /// Country and network of addresses outside the app, for grey map pins.
     let external = ExternalOwners(lookup: IPLookup())
+    /// Checks from this Mac to each server, for the map.
+    public let probes = MacProbeModel()
+    /// Which server each site runs on, for the map.
+    let siteHosts = SiteHostsModel()
+    /// Traffic of every VPN peer, from the counters in consecutive snapshots.
+    @Published public private(set) var peerRates = RateMeter()
 
     public var overall: ServerStatus.Level {
         if configError != nil { return .warning }
@@ -77,6 +83,10 @@ public final class AppModel: ObservableObject {
             // The model lives as long as the app, so unowned is safe here.
             try await backend.start(onUpdate: { [unowned self] list in
                 Task { @MainActor in
+                    var rates = self.peerRates
+                    let fed = rates.add(list)
+                    rates.keep(fed)
+                    self.peerRates = rates
                     self.statuses = list
                     self.lastRound = Date()
                 }

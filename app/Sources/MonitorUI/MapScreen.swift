@@ -11,6 +11,10 @@ struct MapScreen: View {
     @ObservedObject private var locations: ServerLocations
     @ObservedObject private var mac: MacLinksModel
     @ObservedObject private var external: ExternalOwners
+    @ObservedObject private var probes: MacProbeModel
+    @ObservedObject private var siteHosts: SiteHostsModel
+    @StateObject private var history = MapHistoryModel()
+    @State private var showHistory = false
     @State private var position: MapCameraPosition = .automatic
     @State private var center: CLLocationCoordinate2D?
     @State private var selectedPin: String?
@@ -20,12 +24,18 @@ struct MapScreen: View {
     @AppStorage("map.mac") private var showMac = true
     @AppStorage("map.external") private var showExternal = true
     @AppStorage("map.clients") private var showClients = true
+    @AppStorage("map.traffic") private var showTraffic = true
+    @AppStorage("map.sites") private var showSites = true
+    @AppStorage("map.load") private var showLoad = true
+    @AppStorage("map.macChecks") private var showMacChecks = true
 
     init(model: AppModel) {
         self.model = model
         self.locations = model.locations
         self.mac = model.mac
         self.external = model.external
+        self.probes = model.probes
+        self.siteHosts = model.siteHosts
     }
 
     /// Servers sharing a place become one pin with a number.
@@ -56,23 +66,33 @@ struct MapScreen: View {
         locations.manual(MacLinksModel.pinID) ?? mac.defaultCoordinate(avoiding: pins.map(\.coordinate))
     }
 
+    /// The history slider shows a past moment: live-only layers step aside.
+    private var inPast: Bool { showHistory && history.time != nil }
+
     var body: some View {
         let pins = pins
-        let routes = showRoutes ? model.routes : []
+        let live = !inPast
+        let routes = showRoutes && live ? model.routes : []
         let macAt = macCoordinate(pins)
-        let macRoutes = showMac ? mac.routes(model.statuses) : []
-        let hops = showExternal ? ExternalHop.compute(model).filter { showMac || $0.fromID != MacLinksModel.pinID } : []
+        let macRoutes = showMac && live ? mac.routes(model.statuses) : []
+        let hops = showExternal && live ? ExternalHop.compute(model).filter { showMac || $0.fromID != MacLinksModel.pinID } : []
         let extPins = ExternalPin.group(hops, owners: external.owners, avoiding: pins.map(\.coordinate))
-        let spots = showClients ? VPNClientSpot.compute(model) : []
+        let spots = showClients && live ? VPNClientSpot.compute(model) : []
         let clientPins = ClientPin.group(spots, owners: external.owners, avoiding: pins.map(\.coordinate))
+        let chains = NetworkChains.build(macID: MacLinksModel.pinID, macRoutes: macRoutes, routes: routes)
+        let chosen = chains.first { PathKey.id($0) == selectedPin }
+        let clusters = showSites ? siteClusters(pins) : []
         HStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
                 Map(position: $position, selection: $selectedPin) {
-                    linkLayer()
-                    routeLayer(routes)
-                    macRouteLayer(macRoutes, from: macAt)
+                    linkLayers()
+                    pathLayer(chosen, mac: macAt)
+                    routeLayer(routes, chains: chains)
+                    macRouteLayer(macRoutes, from: macAt, chains: chains)
+                    macCheckLayer(macAt)
                     clientLayer(clientPins)
                     externalLayer(extPins, mac: macAt)
+                    siteLayer(clusters)
                     macPin(macAt)
                     serverPins(pins)
                 }
@@ -83,11 +103,18 @@ struct MapScreen: View {
                     MapScaleView()
                 }
                 .onMapCameraChange { ctx in center = ctx.region.center }
+                .overlay(alignment: .bottom) {
+                    if showHistory {
+                        HistoryBar(history: history, model: model)
+                            .frame(maxWidth: 720)
+                            .padding(12)
+                    }
+                }
 
                 layers
                     .padding(12)
             }
-            inspector(pins: pins, clientPins: clientPins, extPins: extPins)
+            inspector(pins: pins, clientPins: clientPins, extPins: extPins, chosen: chosen, clusters: clusters)
         }
         .navigationTitle("Карта")
         .navigationSubtitle("\(model.visible.count) серверов" + (routes.isEmpty ? "" : " · маршрутов VPN: \(routes.count)"))
@@ -100,6 +127,12 @@ struct MapScreen: View {
                 .pickerStyle(.segmented)
             }
             ToolbarItem {
+                Toggle(isOn: $showHistory) {
+                    Label("История", systemImage: "clock.arrow.circlepath")
+                }
+                .help("Карта за последние 30 дней")
+            }
+            ToolbarItem {
                 Button { withAnimation { position = .automatic } } label: {
                     Label("Показать все серверы", systemImage: "arrow.up.left.and.arrow.down.right")
                 }
@@ -108,6 +141,24 @@ struct MapScreen: View {
         }
         .task(id: showMac) {
             if showMac { await mac.run() }
+        }
+        .task {
+            probes.setTargets(model.statuses.map(\.server))
+            await probes.run()
+        }
+        .onChange(of: model.statuses.map(\.server), initial: true) { _, servers in
+            probes.setTargets(servers)
+            siteHosts.refresh(sites: model.siteConfigs, servers: servers)
+        }
+        .onChange(of: model.siteConfigs, initial: true) { _, sites in
+            siteHosts.refresh(sites: sites, servers: model.statuses.map(\.server))
+        }
+        .onChange(of: siteHosts.addresses.values.compactMap(\.first).sorted()) { _, ips in external.request(ips) }
+        .onChange(of: showHistory) { _, on in
+            if !on {
+                history.stop()
+                history.show(nil, model: model)
+            }
         }
         .onChange(of: spots.map(\.ip), initial: true) { _, ips in external.request(ips, first: true) }
         .onChange(of: hops.map(\.ip), initial: true) { _, ips in external.request(ips) }
@@ -121,8 +172,20 @@ struct MapScreen: View {
     }
 
     @ViewBuilder
-    private func inspector(pins: [Pin], clientPins: [ClientPin], extPins: [ExternalPin]) -> some View {
-        if let id = selectedPin, let pin = clientPins.first(where: { $0.id == id }) {
+    private func inspector(pins: [Pin], clientPins: [ClientPin], extPins: [ExternalPin],
+                           chosen: NetworkChain?, clusters: [SiteCluster]) -> some View {
+        if let chain = chosen {
+            Divider()
+            PathInspector(model: model, probes: probes, external: external, chain: chain)
+                .frame(width: 300)
+        } else if let id = selectedPin, id.hasPrefix(SiteKey.prefix),
+                  let site = model.sites.first(where: { SiteKey.id($0.id) == id }) {
+            Divider()
+            SiteInspector(model: model, site: site,
+                          cluster: clusters.first { c in c.sites.contains { $0.id == site.id } },
+                          history: siteHistory(site.id))
+                .frame(width: 300)
+        } else if let id = selectedPin, let pin = clientPins.first(where: { $0.id == id }) {
             Divider()
             ClientsInspector(model: model, pin: pin, owners: external.owners)
                 .frame(width: 300)
@@ -136,12 +199,39 @@ struct MapScreen: View {
                 .frame(width: 300)
         } else if let id = selectedPin, let pin = pins.first(where: { $0.id == id }) {
             Divider()
-            MapInspector(model: model, statuses: pin.statuses, center: center)
+            MapInspector(model: model, probes: probes, statuses: pin.statuses, center: center)
                 .frame(width: 300)
         } else if !unplaced.isEmpty {
             Divider()
             UnplacedList(model: model, statuses: unplaced, center: center)
                 .frame(width: 260)
+        }
+    }
+
+    @MapContentBuilder
+    private func linkLayers() -> some MapContent {
+        if inPast { pastLinkLayer() }
+        if !inPast { linkLayer() }
+    }
+
+    /// Checks between servers at the moment the history shows.
+    @MapContentBuilder
+    private func pastLinkLayer() -> some MapContent {
+        if showLinks, let m = history.moment {
+            ForEach(PastLink.build(m, model.statuses)) { l in
+                if let a = coordinate(l.fromID), let b = coordinate(l.toID) {
+                    MapPolyline(coordinates: [a, b], contourStyle: .geodesic)
+                        .stroke(l.ok ? Color.secondary.opacity(0.6) : Color.red,
+                                style: StrokeStyle(lineWidth: 1.5, dash: l.ok ? [] : [5, 4]))
+                    Annotation("", coordinate: LinkPair.greatCircleMidpoint(a, b), anchor: .center) {
+                        Text(l.label)
+                            .font(.caption2.weight(.medium)).monospacedDigit()
+                            .foregroundStyle(l.ok ? Color.primary : Color.red)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(.regularMaterial, in: Capsule())
+                    }
+                }
+            }
         }
     }
 
@@ -172,39 +262,138 @@ struct MapScreen: View {
     }
 
     @MapContentBuilder
-    private func routeLayer(_ routes: [VPNRoute]) -> some MapContent {
+    private func routeLayer(_ routes: [VPNRoute], chains: [NetworkChain]) -> some MapContent {
         ForEach(routes) { r in
             if let a = coordinate(r.fromID), let b = coordinate(r.toID), !same(a, b) {
+                let traffic = showTraffic ? Traffic.route(r, model: model) : nil
                 // Straight on the map, so the arrow in the middle points along it.
                 MapPolyline(coordinates: [a, b], contourStyle: .straight)
                     .stroke(RouteStyle.color(r),
-                            style: StrokeStyle(lineWidth: 3, lineCap: .round, dash: r.kind == .relay ? [7, 5] : []))
+                            style: StrokeStyle(lineWidth: TrafficStyle.width(traffic?.rate, base: 3), lineCap: .round,
+                                               dash: r.kind == .relay ? [7, 5] : []))
                 Annotation("", coordinate: RouteStyle.midpoint(a, b), anchor: .center) {
-                    Image(systemName: "arrowtriangle.right.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(RouteStyle.color(r))
-                        .rotationEffect(RouteStyle.angle(a, b))
-                        .help(RouteStyle.describe(r, model))
+                    RouteArrow(color: RouteStyle.color(r), angle: RouteStyle.angle(a, b), size: 13,
+                               help: RouteStyle.describe(r, model) + "\nНажмите, чтобы увидеть весь путь",
+                               label: routeLabel(traffic), labelHelp: routeLabelHelp(r, traffic)) {
+                        selectPath(from: r.fromID, to: r.toID, chains)
+                    }
+                }
+            }
+        }
+    }
+
+    private func macLabel(_ rate: RateMeter.Rate?) -> String? {
+        guard let rate, TrafficStyle.worthShowing(rate) else { return nil }
+        return TrafficStyle.text(rate)
+    }
+
+    private func routeLabel(_ t: (rate: RateMeter.Rate, approximate: Bool)?) -> String? {
+        guard let t, TrafficStyle.worthShowing(t.rate) else { return nil }
+        return (t.approximate ? "≈ " : "") + TrafficStyle.text(t.rate)
+    }
+
+    private func routeLabelHelp(_ r: VPNRoute, _ t: (rate: RateMeter.Rate, approximate: Bool)?) -> String {
+        guard let t else { return "" }
+        var text = TrafficStyle.detail(t.rate, downIsTx: false)
+        if t.approximate {
+            let name = model.status(r.toID)?.server.name ?? r.toID
+            text += "\nВесь трафик сервера \(name): отдельного счётчика у этой пересылки нет"
+        }
+        return text
+    }
+
+    /// The path a hop belongs to, shown in the panel on the right.
+    private func selectPath(from: String, to: String, _ chains: [NetworkChain]) {
+        if let c = chains.first(where: { $0.contains(from: from, to: to) }) { selectedPin = PathKey.id(c) }
+    }
+
+    /// The chosen path drawn under the routes as a wide light band.
+    @MapContentBuilder
+    private func pathLayer(_ chain: NetworkChain?, mac macAt: CLLocationCoordinate2D) -> some MapContent {
+        if let chain {
+            let points = chain.nodes.compactMap { $0 == MacLinksModel.pinID ? Optional(macAt) : coordinate($0) }
+            MapPolyline(coordinates: points, contourStyle: .straight)
+                .stroke(Color.accentColor.opacity(0.28), style: StrokeStyle(lineWidth: 14, lineCap: .round, lineJoin: .round))
+        }
+    }
+
+    /// Lines from this Mac to each server with the time to connect.
+    @MapContentBuilder
+    private func macCheckLayer(_ macAt: CLLocationCoordinate2D) -> some MapContent {
+        if showMacChecks, showMac, !inPast {
+            ForEach(model.visible) { s in
+                if let p = probes.probes[s.id], let b = coordinate(s.id), !same(macAt, b) {
+                    MapPolyline(coordinates: [macAt, b], contourStyle: .geodesic)
+                        .stroke(p.ok ? RouteStyle.macTint.opacity(0.45) : Color.red.opacity(0.8),
+                                style: StrokeStyle(lineWidth: 1.2, dash: [2, 4]))
+                    Annotation("", coordinate: MacCheck.labelPoint(macAt, b), anchor: .center) {
+                        TrafficLabel(text: MacCheck.label(p), tint: p.ok ? RouteStyle.macTint : .red,
+                                     help: MacCheck.help(p, s.server.name))
+                    }
                 }
             }
         }
     }
 
     @MapContentBuilder
-    private func macRouteLayer(_ macRoutes: [MacRoute], from macAt: CLLocationCoordinate2D) -> some MapContent {
+    private func siteLayer(_ clusters: [SiteCluster]) -> some MapContent {
+        let levels = siteLevels()
+        ForEach(clusters) { c in
+            Annotation("", coordinate: c.coordinate, anchor: .center) {
+                SiteRingView(cluster: c, levels: levels) { id in selectedPin = SiteKey.id(id) }
+            }
+        }
+    }
+
+    private func siteHistory(_ siteID: String) -> [String: Bool]? {
+        inPast ? (history.moment?.sites[siteID] ?? [:]) : nil
+    }
+
+    private func siteLevels() -> [String: ServerStatus.Level] {
+        var out: [String: ServerStatus.Level] = [:]
+        for s in model.sites { out[s.id] = SiteMark.level(s, history: siteHistory(s.id)) }
+        return out
+    }
+
+    /// Sites around the pin of the server they run on; sites hosted
+    /// elsewhere near the country of their address.
+    private func siteClusters(_ pins: [Pin]) -> [SiteCluster] {
+        let levels = siteLevels()
+        var byKey: [String: SiteCluster] = [:]
+        for site in model.sites {
+            if onlyProblems, let l = levels[site.id], l != .warning, l != .critical { continue }
+            if let sid = siteHosts.server[site.id] {
+                guard let pin = pins.first(where: { $0.statuses.contains { $0.id == sid } }) else { continue }
+                byKey[pin.id, default: SiteCluster(id: SiteCluster.prefix + pin.id, coordinate: pin.coordinate,
+                                                   sites: [], onServer: true, place: pin.title)].sites.append(site)
+            } else if let ip = siteHosts.addresses[site.id]?.first, let code = external.owners[ip]?.country,
+                      let country = Country.known.first(where: { $0.code == code }) {
+                let key = "ext-" + code
+                let at = CLLocationCoordinate2D(latitude: country.lat + 1.8, longitude: country.lon - 3)
+                byKey[key, default: SiteCluster(id: SiteCluster.prefix + key, coordinate: at,
+                                                sites: [], onServer: false, place: country.name)].sites.append(site)
+            }
+        }
+        return byKey.values.sorted { $0.id < $1.id }
+    }
+
+    @MapContentBuilder
+    private func macRouteLayer(_ macRoutes: [MacRoute], from macAt: CLLocationCoordinate2D,
+                               chains: [NetworkChain]) -> some MapContent {
         ForEach(macRoutes) { r in
             // Through the Mac's VPN the hop starts at that server;
             // the Mac -> VPN server arrow is a route of its own.
             let a = r.viaID.flatMap { coordinate($0) } ?? macAt
             if let b = coordinate(r.toID), !same(a, b) {
+                let rate = showTraffic ? Traffic.mac(r, model: model) : nil
                 MapPolyline(coordinates: [a, b], contourStyle: .straight)
-                    .stroke(RouteStyle.color(r), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .stroke(RouteStyle.color(r), style: StrokeStyle(lineWidth: TrafficStyle.width(rate, base: 2.5), lineCap: .round))
                 Annotation("", coordinate: RouteStyle.midpoint(a, b), anchor: .center) {
-                    Image(systemName: "arrowtriangle.right.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(RouteStyle.color(r))
-                        .rotationEffect(RouteStyle.angle(a, b))
-                        .help(RouteStyle.describe(r, model))
+                    RouteArrow(color: RouteStyle.color(r), angle: RouteStyle.angle(a, b), size: 12,
+                               help: RouteStyle.describe(r, model) + "\nНажмите, чтобы увидеть весь путь",
+                               label: macLabel(rate), labelHelp: rate.map { TrafficStyle.detail($0, downIsTx: false) } ?? "") {
+                        selectPath(from: r.viaID ?? MacLinksModel.pinID, to: r.toID, chains)
+                    }
                 }
             }
         }
@@ -215,9 +404,16 @@ struct MapScreen: View {
         ForEach(clientPins) { pin in
             ForEach(pin.serverIDs, id: \.self) { sid in
                 if let b = coordinate(sid), !same(pin.coordinate, b) {
+                    let rate = showTraffic ? Traffic.clients(pin, server: sid, model: model) : nil
                     MapPolyline(coordinates: [pin.coordinate, b], contourStyle: .geodesic)
                         .stroke(pin.active(to: sid) ? RouteStyle.clientTint.opacity(0.8) : Color.gray.opacity(0.4),
-                                style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                                style: StrokeStyle(lineWidth: TrafficStyle.width(rate, base: 1.5), lineCap: .round))
+                    if let rate, TrafficStyle.worthShowing(rate) {
+                        Annotation("", coordinate: LinkPair.greatCircleMidpoint(pin.coordinate, b), anchor: .center) {
+                            TrafficLabel(text: TrafficStyle.text(rate), tint: RouteStyle.clientTint,
+                                         help: "Клиенты VPN: " + TrafficStyle.detail(rate, downIsTx: true))
+                        }
+                    }
                 }
             }
             Annotation("", coordinate: pin.coordinate, anchor: .center) {
@@ -271,10 +467,24 @@ struct MapScreen: View {
     private func serverPins(_ pins: [Pin]) -> some MapContent {
         ForEach(pins) { pin in
             Annotation(pin.title, coordinate: pin.coordinate, anchor: .center) {
-                PinView(level: pin.level, count: pin.statuses.count)
+                PinView(level: level(of: pin), count: pin.statuses.count, load: load(of: pin))
             }
             .tag(pin.id)
         }
+    }
+
+    /// Now, or at the moment the history shows.
+    private func level(of pin: Pin) -> ServerStatus.Level {
+        inPast ? (pin.statuses.map { history.level($0.id) }.max() ?? .unknown) : pin.level
+    }
+
+    /// The busiest CPU among the pin's servers, in percent.
+    private func load(of pin: Pin) -> Double? {
+        guard showLoad else { return nil }
+        let values = pin.statuses.compactMap { s in
+            inPast ? history.moment?.cpu[s.id] : s.snapshot?.cpu.usagePercent
+        }
+        return values.max()
     }
 
     private var layers: some View {
@@ -296,7 +506,14 @@ struct MapScreen: View {
             }
             Toggle("Клиенты VPN", isOn: $showClients)
             Toggle("Чужие узлы", isOn: $showExternal)
+            Toggle("Сайты", isOn: $showSites)
+            Toggle("Загрузка процессора", isOn: $showLoad)
+            Toggle("Трафик на линиях", isOn: $showTraffic)
             Toggle("Этот Mac", isOn: $showMac)
+            if showMac {
+                Toggle("Проверка с этого Mac", isOn: $showMacChecks)
+                    .padding(.leading, 16)
+            }
             if showMac {
                 HStack(spacing: 4) {
                     Path { p in p.move(to: .init(x: 0, y: 4)); p.addLine(to: .init(x: 18, y: 4)) }
@@ -461,11 +678,24 @@ enum RouteStyle {
 private struct PinView: View {
     var level: ServerStatus.Level
     var count: Int
+    /// CPU in percent, drawn as a ring; nil hides the ring.
+    var load: Double? = nil
 
     var body: some View {
+        let size: CGFloat = count > 1 ? 22 : 14
         ZStack {
             if level == .critical {
                 Circle().fill(level.color.opacity(0.18)).frame(width: 34, height: 34)
+            }
+            if let load {
+                Circle()
+                    .stroke(Color.secondary.opacity(0.3), lineWidth: 3)
+                    .frame(width: size + 9, height: size + 9)
+                Circle()
+                    .trim(from: 0, to: min(1, max(0.03, load / 100)))
+                    .stroke(load >= 70 ? Color.orange : Color.indigo, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: size + 9, height: size + 9)
             }
             Circle()
                 .fill(level.color)
@@ -477,12 +707,14 @@ private struct PinView: View {
             }
         }
         .accessibilityLabel("\(count) серв., \(level.label)")
+        .help(load.map { "Процессор \(Fmt.percent($0))" } ?? "")
     }
 }
 
 /// The panel next to the map for the selected pin.
 private struct MapInspector: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var probes: MacProbeModel
     var statuses: [ServerStatus]
     var center: CLLocationCoordinate2D?
     /// The server whose pin is about to move to the map's center, and where.
@@ -524,6 +756,23 @@ private struct MapInspector: View {
                         .font(.callout)
                     }
                     if let verdict = verdict(s, reach) {
+                        Text(verdict).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            if let p = probes.probes[s.id] {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("С этого Mac").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    HStack {
+                        StatusDot(level: p.ok ? .ok : .critical)
+                        Text(p.throughVPN ? "через VPN" : "напрямую").lineLimit(1)
+                        Spacer(minLength: 6)
+                        Text(p.latencyMs.map(Fmt.ms) ?? "нет ответа")
+                            .foregroundStyle(p.ok ? Color.primary : Color.red).monospacedDigit()
+                    }
+                    .font(.callout)
+                    .help(MacCheck.help(p, s.server.name))
+                    if let verdict = macVerdict(p, reach) {
                         Text(verdict).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -586,6 +835,15 @@ private struct MapInspector: View {
                 }
             }
         }
+    }
+
+    /// The Mac cannot reach a server the other servers see: blocked on the
+    /// Mac's side. Through a VPN it says nothing about the Mac's country.
+    private func macVerdict(_ p: MacProbeModel.Probe, _ reach: [ServerLink]) -> String? {
+        guard !p.ok else { return nil }
+        if p.throughVPN { return "Mac ходит к этому серверу через VPN, поэтому проверка не показывает, открыт ли он из вашей страны." }
+        guard reach.contains(where: \.check.ok) else { return nil }
+        return "Другие серверы его видят, а этот Mac нет. Похоже, сервер блокирует ваш провайдер или страна."
     }
 
     /// Down everywhere vs blocked from one place.
