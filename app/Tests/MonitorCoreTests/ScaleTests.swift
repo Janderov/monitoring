@@ -152,6 +152,23 @@ final class ScaleTests: XCTestCase {
         XCTAssertTrue(problems[0].contains("сервер us: токена нет"), problems[0])
     }
 
+    func testServerLeavingTheListKeepsHistory() async throws {
+        // A server skipped for a while (servers.json unreadable) comes back
+        // with its history; only an explicit removal deletes it.
+        let dir = try tempDir()
+        let agent = FakeAgent()
+        agent.history = [Fixtures.snapshot(time: t0)]
+        let store = try Store(path: dir.appendingPathComponent("m.sqlite").path)
+        let poller = Poller(client: AgentClient(transport: agent), store: store,
+                            onUpdate: { _ in }, onEvents: { _ in })
+        await poller.setServers([Fixtures.server])
+        await poller.pollAll(now: t0.addingTimeInterval(60))
+        await poller.setServers([])
+        await poller.setServers([Fixtures.server])
+        let kept = try await store.samples(Fixtures.server.id, from: t0.addingTimeInterval(-60), to: t0.addingTimeInterval(60))
+        XCTAssertEqual(kept.count, 1)
+    }
+
     func testPBKDF2() {
         // RFC 7914, section 11.
         let key = Transfer.derive("password", salt: Data("salt".utf8), iterations: 4096)

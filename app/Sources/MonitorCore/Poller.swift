@@ -143,11 +143,12 @@ public actor Poller {
         setSites(file.sites ?? [])
     }
 
-    /// Replaces the server list; data of removed servers is dropped.
+    /// Replaces the server list. History stays in the store: a server can
+    /// leave the list only for a while (a servers.json entry skipped as
+    /// unreadable); the person deleting it drops its data explicitly.
     public func setServers(_ list: [ServerConfig]) async {
         let ids = Set(list.map(\.id))
         for old in servers where !ids.contains(old.id) {
-            try? await store.forget(serverID: old.id)
             statuses[old.id] = nil
             rebooting[old.id] = nil
             failingSince[old.id] = nil
