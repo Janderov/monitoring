@@ -98,6 +98,12 @@ public struct MenuBarContent: View {
             Divider().padding(.horizontal, 12)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    if let problem = model.health.problem {
+                        Label("Мониторинг не работает: \(problem)", systemImage: "wifi.exclamationmark")
+                            .foregroundStyle(.secondary).font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                    }
                     if let err = model.configError {
                         Label(err, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange).font(.callout)
@@ -134,7 +140,7 @@ public struct MenuBarContent: View {
             StatusDot(level: model.overall, size: 10)
             VStack(alignment: .leading, spacing: 1) {
                 Text(summary).fontWeight(.semibold)
-                if let t = model.lastRound {
+                if let t = model.lastPolled {
                     Text("опрос \(Fmt.relative(t))").font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -146,6 +152,7 @@ public struct MenuBarContent: View {
     }
 
     private var summary: String {
+        if model.health.problem != nil { return "Мониторинг не работает" }
         let crit = model.problems.filter { $0.alert.severity == .critical }.count
         let warn = model.problems.count - crit
         if crit == 0 && warn == 0 { return model.statuses.isEmpty ? "Нет серверов" : "Всё в порядке" }
@@ -161,16 +168,19 @@ public struct MenuBarContent: View {
     }
 
     private func problemRow(_ p: Problem) -> some View {
-        HoverRow(action: { open(server: p.status.id) }) {
+        HoverRow(action: {
+            model.show(p)
+            openMain()
+        }) {
             StatusDot(level: p.alert.severity.level)
             VStack(alignment: .leading, spacing: 1) {
-                (Text(p.status.server.name).fontWeight(.medium) + Text("  ") + Text(p.alert.message))
+                (Text(p.name).fontWeight(.medium) + Text("  ") + Text(p.alert.message))
                     .fixedSize(horizontal: false, vertical: true)
                 Text(Fmt.since(p.alert.since)).font(.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: 6)
-            if model.can(.ssh, p.status.server) {
-                Button("SSH") { model.openSSH(p.status.server) }.controlSize(.small)
+            if let server = p.server, model.can(.ssh, server) {
+                Button("SSH") { model.openSSH(server) }.controlSize(.small)
             }
         }
     }

@@ -50,9 +50,22 @@ private struct GeneralSettings: View {
     @AppStorage("digest.enabled") private var digest = true
     @AppStorage("digest.hour") private var digestHour = 9
     @Environment(\.openWindow) private var openWindow
+    @State private var launch = false
+    @State private var launchError: String?
 
     var body: some View {
         Form {
+            Section("Запуск") {
+                Toggle("Открывать при входе в систему", isOn: Binding(get: { launch }, set: { on in
+                    launchError = Background.setLaunchAtLogin(on)
+                    launch = Background.launchAtLogin
+                }))
+                Text("Проверки идут, пока приложение открыто. После сна Мак сразу опрашивает серверы, а если за паузу что-то случилось, присылает сводку.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let launchError {
+                    Text(launchError).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Section("Серверы") {
                 LabeledContent("Список серверов") {
                     HStack {
@@ -105,6 +118,7 @@ private struct GeneralSettings: View {
         }
         .formStyle(.grouped)
         .frame(minHeight: 360)
+        .onAppear { launch = Background.launchAtLogin }
     }
 
     /// The database with its write-ahead log, which holds the newest pages.

@@ -10,6 +10,7 @@ struct OverviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                HealthStrip(model: model)
                 if let err = model.configError {
                     AlertStrip(level: .warning, text: err, trailing: nil)
                 }
@@ -23,7 +24,7 @@ struct OverviewView: View {
         }
         .task { model.soon.refresh(model) }
         .navigationTitle("Обзор")
-        .navigationSubtitle(model.lastRound.map { "опрос \(Fmt.relative($0))" } ?? "")
+        .navigationSubtitle(model.lastPolled.map { "опрос \(Fmt.relative($0))" } ?? "")
     }
 
     private var summary: some View {
@@ -215,7 +216,7 @@ struct ProblemsTable: View {
                 }
             }
             .width(min: 100, ideal: 110)
-            TableColumn("Объект") { p in Text(p.status.server.name) }.width(min: 80, ideal: 120)
+            TableColumn("Объект") { p in Text(p.name) }.width(min: 80, ideal: 120)
             TableColumn("Что случилось") { p in Text(p.alert.message) }
             TableColumn("Началось") { p in Text(Fmt.time(p.alert.since)).foregroundStyle(.secondary).monospacedDigit() }
                 .width(min: 70, ideal: 90)
@@ -223,11 +224,15 @@ struct ProblemsTable: View {
         }
         .contextMenu(forSelectionType: String.self) { ids in
             if let id = ids.first, let p = model.problems.first(where: { $0.id == id }) {
-                ServerContextMenu(model: model, server: p.status.server)
-                Button("Открыть сервер") { model.show(server: p.status.id) }
+                if let server = p.server {
+                    ServerContextMenu(model: model, server: server)
+                    Button("Открыть сервер") { model.show(p) }
+                } else {
+                    Button("Открыть сайт") { model.show(p) }
+                }
             }
         } primaryAction: { ids in
-            if let id = ids.first, let p = model.problems.first(where: { $0.id == id }) { model.show(server: p.status.id) }
+            if let id = ids.first, let p = model.problems.first(where: { $0.id == id }) { model.show(p) }
         }
     }
 }
@@ -238,7 +243,7 @@ struct ProblemsView: View {
     var body: some View {
         Group {
             if model.problems.isEmpty {
-                EmptyNote(title: "Проблем нет", detail: model.statuses.isEmpty ? nil : "Все серверы в норме")
+                EmptyNote(title: "Проблем нет", detail: model.statuses.isEmpty ? nil : "Все серверы и сайты в норме")
             } else {
                 ProblemsTable(model: model)
             }

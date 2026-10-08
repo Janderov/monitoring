@@ -92,6 +92,11 @@ public actor Store {
           ok INTEGER NOT NULL, latency_ms REAL,
           PRIMARY KEY (server_id, peer_id, ts)) WITHOUT ROWID;
         """,
+        // Small app state that must survive a restart: the alerts in progress
+        // and when the Mac last polled.
+        """
+        CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+        """,
     ]
 
     public static var schemaVersion: Int { migrations.count }
@@ -199,6 +204,18 @@ public actor Store {
         try db.prepare("INSERT OR REPLACE INTO domains (domain, expiry, error, checked_at) VALUES (?, ?, ?, ?)")
             .run(.text(domain), e.expiry.map { .int(Int64($0.timeIntervalSince1970)) } ?? .null,
                  e.error.map { .text($0) } ?? .null, .int(Int64(e.checkedAt.timeIntervalSince1970)))
+    }
+
+    public func setValue(_ value: String?, for key: String) throws {
+        if let value {
+            try db.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").run(.text(key), .text(value))
+        } else {
+            try db.prepare("DELETE FROM kv WHERE key = ?").run(.text(key))
+        }
+    }
+
+    public func value(_ key: String) throws -> String? {
+        try db.prepare("SELECT value FROM kv WHERE key = ?").rows(.text(key)).first?.text(0)
     }
 
     public func domains() throws -> [String: DomainExpiry.Entry] {

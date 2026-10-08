@@ -44,7 +44,7 @@ struct ServersScreen: View {
 
     private var subtitle: String {
         let n = model.visible.count
-        if let t = model.lastRound { return "\(n) · опрос \(Fmt.relative(t))" }
+        if let t = model.lastPolled { return "\(n) · опрос \(Fmt.relative(t))" }
         return "\(n)"
     }
 

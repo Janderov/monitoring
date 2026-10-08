@@ -90,6 +90,7 @@ extension AppModel {
     public func objectName(_ id: String) -> String {
         if let s = status(id) { return s.server.name }
         if let site = siteStatuses.first(where: { SiteStatus.alertID($0.id) == id }) { return site.site.name }
+        if id == AwaySummary.sourceID { return "Этот Mac" }
         return id
     }
 

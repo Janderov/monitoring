@@ -41,7 +41,7 @@ public enum Severity: Int, Codable, Comparable, Sendable {
 }
 
 /// One problem seen in a single poll, e.g. "disk is 93% full".
-public struct Condition: Equatable, Sendable {
+public struct Condition: Codable, Equatable, Sendable {
     /// Stable identity across polls, e.g. "disk" or "svc:nginx".
     public var key: String
     public var severity: Severity
@@ -52,6 +52,11 @@ public struct Condition: Equatable, Sendable {
     public init(key: String, severity: Severity, message: String, after: Int = 2) {
         self.key = key; self.severity = severity; self.message = message; self.after = after
     }
+
+    /// How often a lasting problem is repeated. An outage is worth a sound
+    /// every half hour; a full disk or a certificate running out is not,
+    /// once a day is enough (the morning summary lists them too).
+    public var remindEvery: TimeInterval { severity == .critical ? 30 * 60 : 24 * 3600 }
 }
 
 /// What a poll of one server produced.
@@ -63,32 +68,40 @@ public enum PollOutcome: Sendable {
 public enum Rules {
     /// Server unreachable: 3 failed polls in a row before notifying.
     public static let downAfter = 3
+    /// A disk, CPU or memory alert clears only this many points below its
+    /// threshold, so a value hovering at the limit does not ring every minute.
+    public static let hysteresis: Double = 5
 
-    public static func conditions(_ outcome: PollOutcome, thresholds: Thresholds?, now: Date) -> [Condition] {
+    /// `active`: keys of the alerts already raised for this server.
+    public static func conditions(_ outcome: PollOutcome, thresholds: Thresholds?, active: Set<String> = [],
+                                  now: Date) -> [Condition] {
         switch outcome {
         case .failure(let err):
             return [Condition(key: "down", severity: .critical, message: "агент не отвечает: \(err)", after: downAfter)]
         case .snapshot(let s):
-            return conditions(s, thresholds: (thresholds ?? Thresholds()).resolved, now: now)
+            return conditions(s, thresholds: (thresholds ?? Thresholds()).resolved, active: active, now: now)
         }
     }
 
-    static func conditions(_ s: Snapshot, thresholds t: Thresholds, now: Date) -> [Condition] {
+    static func conditions(_ s: Snapshot, thresholds t: Thresholds, active: Set<String> = [],
+                           now: Date) -> [Condition] {
         var out: [Condition] = []
         func pct(_ v: Double) -> String { String(format: "%.0f%%", v) }
+        /// The threshold, lowered while the alert is on.
+        func limit(_ value: Double, _ key: String) -> Double { active.contains(key) ? value - hysteresis : value }
 
-        if let limit = t.diskPercent {
-            for d in s.disks ?? [] where d.usedPercent > limit {
+        if let base = t.diskPercent {
+            for d in s.disks ?? [] where d.usedPercent > limit(base, "disk:\(d.mount)") {
                 out.append(Condition(key: "disk:\(d.mount)", severity: .warning,
                                      message: "диск \(d.mount) заполнен на \(pct(d.usedPercent))"))
             }
         }
-        if let limit = t.cpuPercent, s.cpu.usagePercent > limit {
+        if let base = t.cpuPercent, s.cpu.usagePercent > limit(base, "cpu") {
             out.append(Condition(key: "cpu", severity: .warning,
                                  message: "CPU \(pct(s.cpu.usagePercent)) дольше \(t.cpuMinutes ?? 5) мин",
                                  after: max(t.cpuMinutes ?? 5, 1)))
         }
-        if let limit = t.memoryPercent, s.memory.usedPercent > limit {
+        if let base = t.memoryPercent, s.memory.usedPercent > limit(base, "mem") {
             out.append(Condition(key: "mem", severity: .warning,
                                  message: "память занята на \(pct(s.memory.usedPercent))"))
         }
@@ -180,14 +193,14 @@ public struct ActiveAlert: Equatable, Sendable {
 }
 
 /// Turns per-poll conditions into notifications with the anti-spam rules:
-/// notify only after N bad polls in a row, remind every 30 minutes while it
-/// lasts, send one "back to normal" when it clears for `clearAfter` polls.
+/// notify only after N bad polls in a row, remind while it lasts (every half
+/// hour for outages, daily for warnings), send one "back to normal" when it
+/// clears for `clearAfter` polls.
 public struct AlertEngine: Sendable {
-    public var reminderInterval: TimeInterval = 30 * 60
     /// Good polls in a row before an active alert is resolved (avoids flapping).
     public var clearAfter = 2
 
-    struct State: Sendable {
+    struct State: Codable, Sendable {
         var condition: Condition
         var bad = 0
         var good = 0
@@ -203,8 +216,9 @@ public struct AlertEngine: Sendable {
     public mutating func process(server: ServerConfig, outcome: PollOutcome, now: Date) -> [AlertEvent] {
         let reachable: Bool
         if case .snapshot = outcome { reachable = true } else { reachable = false }
+        let active = Set((states[server.id] ?? [:]).filter { $0.value.firedAt != nil }.keys)
         return process(id: server.id, name: server.name,
-                       conditions: Rules.conditions(outcome, thresholds: server.thresholds, now: now),
+                       conditions: Rules.conditions(outcome, thresholds: server.thresholds, active: active, now: now),
                        reachable: reachable, now: now)
     }
 
@@ -230,7 +244,7 @@ public struct AlertEngine: Sendable {
                 st.lastNotified = now
                 event(.fired, c)
             } else if st.firedAt != nil, let last = st.lastNotified,
-                      now.timeIntervalSince(last) >= reminderInterval {
+                      now.timeIntervalSince(last) >= c.remindEvery {
                 st.lastNotified = now
                 event(.reminder, c)
             }
@@ -268,5 +282,13 @@ public struct AlertEngine: Sendable {
     /// Forget servers that were removed from the config.
     public mutating func retain(serverIDs: Set<String>) {
         states = states.filter { serverIDs.contains($0.key) }
+    }
+
+    /// The whole state, saved after each round so a restart of the app does
+    /// not announce every ongoing problem again as new.
+    public func saved() -> Data? { try? JSONEncoder().encode(states) }
+
+    public mutating func restore(_ data: Data) {
+        if let s = try? JSONDecoder().decode([String: [String: State]].self, from: data) { states = s }
     }
 }

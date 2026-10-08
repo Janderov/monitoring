@@ -10,8 +10,10 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var statuses: [ServerStatus] = []
     @Published public private(set) var siteStatuses: [SiteStatus] = []
     @Published public private(set) var configError: String?
-    /// Time of the last finished polling round, for "опрос 12 с назад".
+    /// Time of the last screen update; views reload their data on it.
     @Published public private(set) var lastRound: Date?
+    /// Whether the Mac itself manages to poll (network, database).
+    @Published public private(set) var health = PollerHealth()
 
     /// Navigation shared by the main window and the menu bar ("open this server").
     @Published public var section: AppSection = .overview
@@ -55,14 +57,22 @@ public final class AppModel: ObservableObject {
     /// Traffic of every VPN peer, from the counters in consecutive snapshots.
     @Published public private(set) var peerRates = RateMeter()
 
+    /// When the data shown was last fresh, for "опрос 12 с назад". While the
+    /// Mac cannot poll it stays at the last round that worked.
+    public var lastPolled: Date? { health.problem == nil ? lastRound : health.lastGoodRound }
+
+    /// The menu bar icon: grey while the monitoring itself does not work,
+    /// since then green would only be an old picture.
     public var overall: ServerStatus.Level {
+        if health.problem != nil { return .unknown }
         if configError != nil { return .warning }
-        return statuses.map(\.level).max() ?? .unknown
+        return (statuses.map(\.level) + siteStatuses.map(\.level).filter { $0 > .ok }).max() ?? .unknown
     }
 
-    /// Problems across all servers, worst and oldest first.
+    /// Problems across all servers and sites, worst and oldest first.
     public var problems: [Problem] {
-        statuses.flatMap { s in s.alerts.map { Problem(status: s, alert: $0) } }
+        (statuses.flatMap { s in s.alerts.map { Problem(server: s, alert: $0) } }
+            + siteStatuses.flatMap { s in s.alerts.map { Problem(site: s, alert: $0) } })
             .sorted { ($0.alert.severity, $1.alert.since) > ($1.alert.severity, $0.alert.since) }
     }
 
@@ -105,6 +115,8 @@ public final class AppModel: ObservableObject {
                 }
             }, onSites: { [unowned self] list in
                 Task { @MainActor in self.siteStatuses = list }
+            }, onHealth: { [unowned self] h in
+                Task { @MainActor in self.health = h }
             })
         } catch {
             configError = "Не удалось открыть данные: \(describe(error))"
@@ -128,6 +140,7 @@ public final class AppModel: ObservableObject {
             }
         }
         await reload()
+        Background.start(self)
         Task { await MorningDigest.checkLoop(self) }
     }
 
@@ -356,12 +369,35 @@ extension AppModel {
         section = .servers
         selectedServerID = id
     }
+
+    public func show(site id: String) {
+        section = .sites
+        selectedSiteID = id
+    }
+
+    /// Opens the server or site a problem belongs to.
+    public func show(_ p: Problem) {
+        if let s = p.server { show(server: s.id) } else if let id = p.siteID { show(site: id) }
+    }
 }
 
+/// One active alert of a server or a site.
 public struct Problem: Identifiable, Sendable {
-    public var status: ServerStatus
+    /// Set for a server's alert.
+    public var server: ServerConfig?
+    /// Set for a site's alert.
+    public var siteID: String?
+    public var name: String
     public var alert: ActiveAlert
-    public var id: String { "\(status.id)|\(alert.key)" }
+    public var id: String { "\(server.map { $0.id } ?? SiteStatus.alertID(siteID ?? ""))|\(alert.key)" }
+
+    public init(server s: ServerStatus, alert: ActiveAlert) {
+        server = s.server; name = s.server.name; self.alert = alert
+    }
+
+    public init(site s: SiteStatus, alert: ActiveAlert) {
+        siteID = s.site.id; name = s.site.name; self.alert = alert
+    }
 }
 /// Whether the app is locked, for code that runs off the main thread.
 final class LockGate: @unchecked Sendable {
