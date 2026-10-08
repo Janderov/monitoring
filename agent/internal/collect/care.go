@@ -91,7 +91,7 @@ func parseUpdates(text string) (pending, security int) {
 type SSHLog struct {
 	// Failed24h counts login attempts that failed: unknown users and wrong
 	// passwords. Public keys a client merely offers do not count.
-	Failed24h int         `json:"failed_24h"`
+	Failed24h int         `json:"failed_day"`
 	Sources   []SSHSource `json:"sources,omitempty"`
 	// Logins are the latest successful logins, newest first.
 	Logins []SSHLogin `json:"logins,omitempty"`
@@ -230,11 +230,12 @@ func tail(path string, max int64) ([]byte, error) {
 // Backup is the dumps of one database container the app made over SSH
 // ("<container>-<UTC stamp>.sql.gz" in the backup folder).
 type Backup struct {
-	Container  string    `json:"container"`
-	Newest     time.Time `json:"newest"`
-	NewestSize int64     `json:"newest_bytes"`
-	Count      int       `json:"count"`
-	TotalBytes int64     `json:"total_bytes"`
+	Container string `json:"container"`
+	// Newest is nil when there is only a nightly job and no dump yet.
+	Newest     *time.Time `json:"newest,omitempty"`
+	NewestSize int64      `json:"newest_bytes"`
+	Count      int        `json:"count"`
+	TotalBytes int64      `json:"total_bytes"`
 	// Nightly: a cron job made by the app runs the dump every night.
 	Nightly bool `json:"nightly,omitempty"`
 }
@@ -270,8 +271,8 @@ func ReadBackups(dir, cronDir string) []Backup {
 		}
 		b.Count++
 		b.TotalBytes += info.Size()
-		if info.ModTime().After(b.Newest) {
-			b.Newest, b.NewestSize = info.ModTime().UTC(), info.Size()
+		if t := info.ModTime().UTC(); b.Newest == nil || t.After(*b.Newest) {
+			b.Newest, b.NewestSize = &t, info.Size()
 		}
 	}
 	if crons, err := os.ReadDir(cronDir); err == nil {

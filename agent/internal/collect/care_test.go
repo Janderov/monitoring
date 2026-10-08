@@ -100,13 +100,13 @@ func TestReadBackups(t *testing.T) {
 	if len(b) != 3 {
 		t.Fatalf("got %+v", b)
 	}
-	if b[0].Container != "db-1" || b[0].Count != 2 || b[0].TotalBytes != 8 || !b[0].Nightly || b[0].Newest.Equal(old) {
+	if b[0].Container != "db-1" || b[0].Count != 2 || b[0].TotalBytes != 8 || !b[0].Nightly || b[0].Newest == nil || b[0].Newest.Equal(old) {
 		t.Fatalf("db-1: %+v", b[0])
 	}
 	if b[1].Container != "mysql" || b[1].Nightly {
 		t.Fatalf("mysql: %+v", b[1])
 	}
-	if b[2].Container != "pg2" || b[2].Count != 0 || !b[2].Nightly {
+	if b[2].Container != "pg2" || b[2].Count != 0 || !b[2].Nightly || b[2].Newest != nil {
 		t.Fatalf("pg2: %+v", b[2])
 	}
 	if ReadBackups(filepath.Join(dir, "missing"), cron) != nil {

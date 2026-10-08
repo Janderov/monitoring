@@ -14,6 +14,8 @@ public enum UserAction: String, CaseIterable, Sendable {
     case manageVPNKeys
     /// Restart a container or reboot a server.
     case restart
+    /// Dump a database now, or switch its nightly dump on and off.
+    case backup
     case updateApp
     /// Give or take away other people's access, set up the admin key.
     case manageAccess
@@ -28,6 +30,7 @@ public enum UserAction: String, CaseIterable, Sendable {
         case .editConfig: return "Изменение настроек"
         case .manageVPNKeys: return "Ключи VPN"
         case .restart: return "Перезапуск"
+        case .backup: return "Бэкапы баз"
         case .updateApp: return "Обновление приложения"
         case .manageAccess: return "Управление доступом"
         case .adminLogin: return "Вход администратора"
@@ -54,7 +57,7 @@ public enum Role: String, CaseIterable, Sendable {
     var allowed: Set<UserAction> {
         switch self {
         case .owner: return Set(UserAction.allCases)
-        case .admin: return [.view, .ssh, .installAgent, .editConfig, .manageVPNKeys, .restart]
+        case .admin: return [.view, .ssh, .installAgent, .editConfig, .manageVPNKeys, .restart, .backup]
         case .vpnOperator: return [.view, .manageVPNKeys]
         case .viewer: return [.view]
         }

@@ -254,8 +254,10 @@ final class SoonModel: ObservableObject {
 
     func items(for serverID: String, model: AppModel) -> [SoonItem] {
         let hosted = model.sites.filter { model.siteHosts.server[$0.id] == serverID }
+        let now = Date()
+        let cost = model.statuses.first { $0.id == serverID }?.server.cost
         return Soon.items(sites: hosted.map { (name: $0.name, tls: $0.tlsExpiry, domain: $0.domainExpiry) },
-                          diskDays: diskDays[serverID], now: Date())
+                          diskDays: diskDays[serverID], payment: cost?.nextPayment(after: now), now: now)
     }
 }
 
@@ -282,10 +284,10 @@ struct SoonSection: View {
             ForEach(items) { i in
                 let days = Fmt.days(until: i.date)
                 HStack {
-                    if i.date.timeIntervalSinceNow <= Soon.badgeWindow {
+                    if Soon.urgent(i, now: Date()) {
                         StatusDot(level: .warning)
                     }
-                    Text(title(i)).lineLimit(1)
+                    Text(Self.title(i)).lineLimit(1)
                     Spacer(minLength: 6)
                     Text(days <= 0 ? "сейчас" : "через \(days) дн")
                         .foregroundStyle(days <= 7 ? Color.orange : Color.primary).monospacedDigit()
@@ -296,11 +298,33 @@ struct SoonSection: View {
         }
     }
 
-    private func title(_ i: SoonItem) -> String {
+    static func title(_ i: SoonItem) -> String {
         switch i.kind {
         case .tls: return "SSL \(i.name)"
         case .domain: return "Домен \(i.name)"
         case .disk: return "Диск заполнится"
+        case .payment: return "Оплата сервера"
+        }
+    }
+}
+
+/// "Требует внимания": upkeep the server is waiting for. Hidden when there
+/// is nothing, so a healthy server's panel stays short.
+struct CareSection: View {
+    var notes: [CareNote]
+
+    var body: some View {
+        if !notes.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                PanelCaption(text: "Требует внимания")
+                ForEach(notes) { n in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        StatusDot(level: .warning)
+                        Text(n.text).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.callout)
+                }
+            }
         }
     }
 }

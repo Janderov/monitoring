@@ -142,6 +142,17 @@ public struct AlertEvent: Equatable, Sendable {
     public var message: String
     public var time: Date
 
+    public init(serverID: String, serverName: String, key: String, kind: Kind, severity: Severity,
+                message: String, time: Date) {
+        self.serverID = serverID
+        self.serverName = serverName
+        self.key = key
+        self.kind = kind
+        self.severity = severity
+        self.message = message
+        self.time = time
+    }
+
     /// Notification title, e.g. "🔴 Нидерланды VPN".
     public var title: String {
         switch kind {

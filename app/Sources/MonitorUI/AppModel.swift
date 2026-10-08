@@ -33,6 +33,9 @@ public final class AppModel: ObservableObject {
     @Published public var pendingRecoveryCode: String?
 
     public let backend: MonitorBackend
+    /// Posts a notification that does not come from the poller (the morning
+    /// summary); redacted while the app is locked, as alerts are.
+    var notifyDirect: (@Sendable ([AlertEvent]) -> Void)?
     public let locations: ServerLocations
     public let updates: UpdateModel
     /// This Mac's own connections to the servers, for the map.
@@ -67,10 +70,12 @@ public final class AppModel: ObservableObject {
         let gate = LockGate()
         // Until the lock reports in, a key set up earlier means locked.
         gate.set(AppModel.keySetUp())
-        self.init(backend: LocalBackend(notify: { events in
-            // Locked: say that something happened, never which server or what.
+        // Locked: say that something happened, never which server or what.
+        let post: @Sendable ([AlertEvent]) -> Void = { events in
             notify(gate.isLocked ? events.map(LockGate.redact) : events)
-        }), gate: gate)
+        }
+        self.init(backend: LocalBackend(notify: post), gate: gate)
+        notifyDirect = post
     }
 
     public convenience init(backend: MonitorBackend) {
@@ -123,6 +128,7 @@ public final class AppModel: ObservableObject {
             }
         }
         await reload()
+        Task { await MorningDigest.checkLoop(self) }
     }
 
     /// Re-reads servers.json and polls right away.

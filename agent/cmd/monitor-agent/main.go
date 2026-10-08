@@ -364,16 +364,17 @@ type sampler struct {
 	// refreshed at most once a minute even when sampling is faster.
 	dbAt    time.Time
 	dbCache []collect.Database
-	// Host care changes slowly and reads log files: every 5 minutes.
+	// Updates and SSH logins change slowly and read log files: every 5
+	// minutes. Backups are one directory listing, read every sample, so a
+	// dump made from the Mac shows at once.
 	careAt    time.Time
 	careCache care
 }
 
 type care struct {
-	system  collect.System
-	ssh     *collect.SSHLog
-	sshErr  string
-	backups []collect.Backup
+	system collect.System
+	ssh    *collect.SSHLog
+	sshErr string
 }
 
 // authLogs: Ubuntu's rsyslog file, or the RHEL name. The agent reads it
@@ -384,7 +385,7 @@ func (s *sampler) care(now time.Time) care {
 	if now.Sub(s.careAt) < 5*time.Minute {
 		return s.careCache
 	}
-	c := care{system: collect.ReadSystem("/"), backups: collect.ReadBackups(collect.BackupDir, "/etc/cron.d")}
+	c := care{system: collect.ReadSystem("/")}
 	if l, err := collect.ReadSSH(authLogs, now); err != nil {
 		c.sshErr = "ssh log: " + err.Error()
 	} else {
@@ -432,7 +433,8 @@ func (s *sampler) sample(ctx context.Context) collect.Snapshot {
 	snap.Databases = s.databases(snap.Containers, now)
 	c := s.care(now)
 	sys := c.system
-	snap.System, snap.SSH, snap.Backups = &sys, c.ssh, c.backups
+	snap.System, snap.SSH = &sys, c.ssh
+	snap.Backups = collect.ReadBackups(collect.BackupDir, "/etc/cron.d")
 	if c.sshErr != "" {
 		snap.Errors = append(snap.Errors, c.sshErr)
 	}

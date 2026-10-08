@@ -38,7 +38,7 @@ enum Period: String, CaseIterable, Identifiable {
 struct ServerDetail: View {
     enum Tab: String, CaseIterable, Identifiable {
         case metrics = "Метрики", services = "Сервисы", containers = "Контейнеры", databases = "Базы данных", vpn = "VPN",
-             processes = "Процессы", checks = "Проверки", events = "События"
+             processes = "Процессы", checks = "Проверки", care = "Обслуживание", events = "События"
         var id: String { rawValue }
     }
 
@@ -149,10 +149,11 @@ struct ServerDetail: View {
         case .metrics: MetricsTab(model: model, status: status, period: period)
         case .services: ServicesTab(services: snap?.services ?? [])
         case .containers: ContainersTab(model: model, server: status.server, containers: snap?.containers ?? [])
-        case .databases: DatabasesTab(databases: snap?.databases)
+        case .databases: DatabasesTab(model: model, server: status.server, databases: snap?.databases, backups: snap?.backups)
         case .vpn: VPNTab(model: model, server: status.server, vpn: snap?.vpn ?? [], links: snap?.links ?? [])
         case .processes: ProcessesTab(processes: snap?.processes ?? [])
         case .checks: ChecksTab(model: model, checks: snap?.checks ?? [])
+        case .care: CareTab(model: model, status: status)
         case .events: EventsList(model: model, serverID: status.id)
         }
     }

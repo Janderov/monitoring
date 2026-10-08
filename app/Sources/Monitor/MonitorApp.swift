@@ -36,6 +36,12 @@ struct MonitorApp: App {
         }
         .windowResizability(.contentSize)
 
+        Window("Мини-панель", id: MiniPanel.id) {
+            MiniPanel(model: model)
+        }
+        .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
+
         MenuBarExtra {
             MenuBarContent(model: model)
                 .background(ReopenHook())

@@ -210,7 +210,7 @@ public enum DiskForecast {
 
 /// Something that runs out soon: a certificate, a domain, the disk.
 public struct SoonItem: Equatable, Identifiable, Sendable {
-    public enum Kind: String, Sendable { case tls, domain, disk }
+    public enum Kind: String, Sendable { case tls, domain, disk, payment }
     public var kind: Kind
     /// The site's name for certificates and domains.
     public var name: String
@@ -225,22 +225,29 @@ public enum Soon {
     public static let listWindow: TimeInterval = 30 * 86400
     /// Gets the dot on the pin.
     public static let badgeWindow: TimeInterval = 14 * 86400
+    /// A monthly payment is always within a month; it gets the dot 3 days ahead.
+    public static let paymentBadgeWindow: TimeInterval = 3 * 86400
 
     /// What a server should be watched for: its sites' certificates and
-    /// domains, and its disk, soonest first.
+    /// domains, its disk and its next payment, soonest first.
     public static func items(sites: [(name: String, tls: Date?, domain: Date?)], diskDays: Double?,
-                             now: Date) -> [SoonItem] {
+                             payment: Date? = nil, now: Date) -> [SoonItem] {
         var out: [SoonItem] = []
         for s in sites {
             if let d = s.tls { out.append(SoonItem(kind: .tls, name: s.name, date: d)) }
             if let d = s.domain { out.append(SoonItem(kind: .domain, name: s.name, date: d)) }
         }
         if let days = diskDays { out.append(SoonItem(kind: .disk, name: "диск", date: now.addingTimeInterval(days * 86400))) }
+        if let p = payment { out.append(SoonItem(kind: .payment, name: "оплата", date: p)) }
         return out.filter { $0.date.timeIntervalSince(now) <= listWindow }.sorted { $0.date < $1.date }
     }
 
+    public static func urgent(_ item: SoonItem, now: Date) -> Bool {
+        item.date.timeIntervalSince(now) <= (item.kind == .payment ? paymentBadgeWindow : badgeWindow)
+    }
+
     public static func badge(_ items: [SoonItem], now: Date) -> Bool {
-        items.contains { $0.date.timeIntervalSince(now) <= badgeWindow }
+        items.contains { urgent($0, now: now) }
     }
 }
 
@@ -298,4 +305,119 @@ public enum IPWho {
         return IPCity(ip: ip, city: city, country: (obj["country_code"] as? String ?? "").uppercased(),
                       latitude: lat, longitude: lon)
     }
+}
+
+/// Something about a server's upkeep worth a look before it becomes a
+/// problem: updates, a pending reboot, missing or old database backups,
+/// many failed SSH logins.
+public struct CareNote: Equatable, Identifiable, Sendable {
+    public enum Kind: String, Sendable { case reboot, security, updates, noBackup, oldBackup, sshNoise }
+    public var kind: Kind
+    public var text: String
+    /// Worth the yellow dot on the pin.
+    public var warn: Bool
+    /// The container, for backup notes.
+    public var subject: String?
+    public var id: String { kind.rawValue + "|" + (subject ?? "") }
+}
+
+public enum Care {
+    /// A backup older than this is "old".
+    public static let backupAge: TimeInterval = 2 * 86400
+    /// Failed SSH logins a day worth mentioning (bots try every server).
+    public static let sshNoise = 1000
+
+    /// Nothing is said about what an older agent does not report.
+    public static func notes(_ snap: Snapshot?, now: Date) -> [CareNote] {
+        guard let snap, let sys = snap.system else { return [] }
+        var out: [CareNote] = []
+        if sys.rebootRequired {
+            out.append(CareNote(kind: .reboot, text: "Нужна перезагрузка после обновлений", warn: true))
+        }
+        if sys.securityUpdates > 0 {
+            out.append(CareNote(kind: .security, text: "Обновлений безопасности: \(sys.securityUpdates)", warn: true))
+        } else if sys.updatesPending > 0 {
+            out.append(CareNote(kind: .updates, text: "Обновлений Ubuntu: \(sys.updatesPending)", warn: false))
+        }
+        for db in snap.databases ?? [] {
+            let b = snap.backups?.first { $0.container == db.container }
+            if let newest = b?.newest {
+                let age = now.timeIntervalSince(newest)
+                if age > backupAge {
+                    out.append(CareNote(kind: .oldBackup, text: "Бэкап базы \(db.container): \(Int(age / 86400)) дн назад",
+                                        warn: true, subject: db.container))
+                }
+            } else {
+                out.append(CareNote(kind: .noBackup, text: "Нет бэкапа базы \(db.container)", warn: true, subject: db.container))
+            }
+        }
+        if let ssh = snap.ssh, ssh.failedDay >= sshNoise {
+            out.append(CareNote(kind: .sshNoise, text: "Чужих попыток входа по SSH за сутки: \(ssh.failedDay)", warn: false))
+        }
+        return out
+    }
+}
+
+/// The morning notification: how the night went and what needs a look.
+public struct MorningSummary: Equatable, Sendable {
+    public var title: String
+    public var body: String
+
+    /// - Parameters:
+    ///   - servers: each server's name and whether it is fine now.
+    ///   - sites: how many sites answer now, of how many.
+    ///   - events: the log of the last day.
+    ///   - soon: what runs out soonest, already sorted.
+    ///   - care: upkeep notes with the server's name.
+    public static func build(servers: [(name: String, ok: Bool)], sites: (ok: Int, total: Int),
+                             events: [Store.LoggedEvent], soon: [(server: String, item: SoonItem)],
+                             care: [(server: String, note: CareNote)], now: Date) -> MorningSummary {
+        let bad = servers.filter { !$0.ok }
+        let sitesBad = sites.total - sites.ok
+        let problems = bad.count + sitesBad
+        let title = problems == 0 ? "Утренняя сводка: всё в порядке" : "Утренняя сводка: проблем \(problems)"
+        var lines: [String] = []
+        var first = "Серверы \(servers.count - bad.count) из \(servers.count) в норме"
+        if sites.total > 0 { first += " · сайты \(sites.ok) из \(sites.total)" }
+        lines.append(first)
+        if !bad.isEmpty { lines.append("Сейчас с проблемой: " + bad.map(\.name).joined(separator: ", ")) }
+
+        let day = events.filter { now.timeIntervalSince($0.time) <= 86400 && $0.time <= now }
+        let downs = day.filter { $0.kind == .fired && $0.severity == .critical }.count
+        let reboots = day.filter { $0.kind == .info && $0.key == "reboot" }.count
+        var night: [String] = []
+        if downs > 0 { night.append("сбоев \(downs)") }
+        if reboots > 0 { night.append("перезагрузок \(reboots)") }
+        lines.append(night.isEmpty ? "За сутки сбоев не было" : "За сутки: " + night.joined(separator: ", "))
+
+        if let s = soon.first(where: { Soon.urgent($0.item, now: now) }) {
+            let days = max(0, Int(s.item.date.timeIntervalSince(now) / 86400))
+            lines.append("Скоро: \(describe(s.item)) (\(s.server)) через \(days) дн")
+        }
+        let warn = care.filter(\.note.warn)
+        if let c = warn.first {
+            lines.append("Внимание: \(c.server), \(c.note.text.lowercasedFirst)" + (warn.count > 1 ? " и ещё \(warn.count - 1)" : ""))
+        }
+        return MorningSummary(title: title, body: lines.joined(separator: "\n"))
+    }
+
+    static func describe(_ i: SoonItem) -> String {
+        switch i.kind {
+        case .tls: return "SSL \(i.name)"
+        case .domain: return "домен \(i.name)"
+        case .disk: return "диск заполнится"
+        case .payment: return "оплата сервера"
+        }
+    }
+
+    /// Whether the summary is due: past `hour` today and not sent today.
+    public static func due(now: Date, hour: Int, lastSent: Date?, calendar: Calendar = .current) -> Bool {
+        guard calendar.component(.hour, from: now) >= hour else { return false }
+        guard let last = lastSent else { return true }
+        return !calendar.isDate(last, inSameDayAs: now)
+    }
+}
+
+extension String {
+    var lowercasedFirst: String { prefix(1).lowercased() + dropFirst() }
 }

@@ -30,6 +30,54 @@ public struct Snapshot: Codable, Equatable, Sendable {
     public var errors: [String]?
     /// How often the agent samples right now; nil from older agents.
     public var intervalS: Int?
+    /// Host care (agent 0.6+), refreshed every 5 minutes.
+    public var system: System?
+    public var ssh: SSHLog?
+    public var backups: [Backup]?
+
+    /// The OS and pending Ubuntu updates, as update-notifier last counted them.
+    public struct System: Codable, Equatable, Sendable {
+        public var os: String?
+        public var updatesPending: Int
+        public var securityUpdates: Int
+        public var rebootRequired: Bool
+        public var rebootPackages: [String]?
+        /// Nil when update-notifier never counted: the numbers are then unknown.
+        public var updatesCheckedAt: Date?
+    }
+
+    /// What sshd logged over the last day.
+    public struct SSHLog: Codable, Equatable, Sendable {
+        /// Unknown users and wrong passwords; keys a client merely offers do not count.
+        public var failedDay: Int
+        public var sources: [Source]?
+        /// Latest successful logins, newest first.
+        public var logins: [Login]?
+        public var source: String?
+
+        public struct Source: Codable, Equatable, Sendable {
+            public var ip: String
+            public var count: Int
+        }
+
+        public struct Login: Codable, Equatable, Sendable {
+            public var time: Date
+            public var user: String
+            public var ip: String
+            public var method: String
+        }
+    }
+
+    /// Dumps of one database container made by the app, and its nightly job.
+    public struct Backup: Codable, Equatable, Sendable {
+        public var container: String
+        /// Nil while there is a nightly job but no dump yet.
+        public var newest: Date?
+        public var newestBytes: Int64
+        public var count: Int
+        public var totalBytes: Int64
+        public var nightly: Bool?
+    }
 
     public struct CPU: Codable, Equatable, Sendable {
         public var cores: Int

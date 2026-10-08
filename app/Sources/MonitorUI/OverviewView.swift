@@ -15,11 +15,13 @@ struct OverviewView: View {
                 }
                 summary
                 problems
+                ahead
                 servers
                 sites
             }
             .padding(20)
         }
+        .task { model.soon.refresh(model) }
         .navigationTitle("Обзор")
         .navigationSubtitle(model.lastRound.map { "опрос \(Fmt.relative($0))" } ?? "")
     }
@@ -40,6 +42,9 @@ struct OverviewView: View {
                     stat("VPN-клиенты онлайн", "\(vpnOnline)", vpnTotal > 0 ? "из \(vpnTotal)" : "нет данных", false)
                     stat("Активные проблемы", "\(model.problems.count)",
                          crit > 0 ? "\(crit) критичных" : (model.problems.isEmpty ? "нет" : "только предупреждения"), crit > 0)
+                    if let cost = Money.total(model.statuses.map(\.server)) {
+                        stat("Серверы в месяц", cost, "по указанным ценам", false)
+                    }
                 }
             }
         }
@@ -65,6 +70,60 @@ struct OverviewView: View {
                     .fitRows(model.problems.count, max: 8)
             }
         }
+    }
+
+    /// What will become a problem if nobody acts: expiries, the disk, payments,
+    /// missing backups, pending security updates. Hidden when there is none.
+    @ViewBuilder private var ahead: some View {
+        let rows = aheadRows(now: Date())
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Скоро и обслуживание").font(.headline)
+                GroupBox {
+                    Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
+                        ForEach(rows) { r in
+                            GridRow {
+                                StatusDot(level: .warning)
+                                Button(r.serverName) { model.show(server: r.serverID) }
+                                    .buttonStyle(.link)
+                                Text(r.text)
+                                Text(r.when ?? "").foregroundStyle(.secondary).monospacedDigit()
+                                    .gridColumnAlignment(.trailing)
+                            }
+                        }
+                    }
+                    .font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    private struct AheadRow: Identifiable {
+        var id: String
+        var serverID: String
+        var serverName: String
+        var text: String
+        var when: String?
+    }
+
+    private func aheadRows(now: Date) -> [AheadRow] {
+        var out: [AheadRow] = []
+        for s in model.statuses {
+            for i in model.soon.items(for: s.id, model: model) where Soon.urgent(i, now: now) {
+                out.append(AheadRow(id: s.id + "|" + i.id, serverID: s.id, serverName: s.server.name,
+                                    text: SoonSection.title(i), when: Self.inDays(i.date)))
+            }
+            for n in Care.notes(s.snapshot, now: now) where n.warn {
+                out.append(AheadRow(id: s.id + "|" + n.id, serverID: s.id, serverName: s.server.name, text: n.text))
+            }
+        }
+        return out
+    }
+
+    private static func inDays(_ d: Date) -> String {
+        let n = Fmt.days(until: d)
+        return n <= 0 ? "сегодня" : "через \(n) дн"
     }
 
     private var servers: some View {
