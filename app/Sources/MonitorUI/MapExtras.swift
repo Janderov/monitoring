@@ -604,6 +604,8 @@ final class MapHistoryModel: ObservableObject {
     @Published private(set) var moment: Moment?
     @Published private(set) var loading = false
     @Published private(set) var playing = false
+    /// Problems and reboots over the 30 days, as marks on the slider.
+    @Published private(set) var marks: [HistoryMark] = []
     private var events: [Store.LoggedEvent] = []
     private var eventsLoaded: Date?
     private var task: Task<Void, Never>?
@@ -667,6 +669,19 @@ final class MapHistoryModel: ObservableObject {
         }
     }
 
+    /// Loads the marks for the slider (the events are kept for 5 minutes).
+    func loadMarks(model: AppModel) {
+        let backend = model.backend
+        Task {
+            if eventsLoaded.map({ Date().timeIntervalSince($0) > 300 }) ?? true {
+                events = (try? await backend.events(limit: 20_000, serverID: nil)) ?? []
+                eventsLoaded = Date()
+            }
+            let now = Date()
+            marks = MapMoment.marks(events, from: now.addingTimeInterval(-Self.span), to: now)
+        }
+    }
+
     func stop() {
         player?.cancel()
         player = nil
@@ -695,14 +710,20 @@ struct HistoryBar: View {
                     Image(systemName: history.playing ? "pause.fill" : "play.fill").frame(width: 14)
                 }
                 .help(history.playing ? "Остановить" : "Проиграть по часу")
-                Slider(value: Binding(
-                    get: { (history.time ?? now).timeIntervalSince1970 },
-                    set: { v in
+                VStack(spacing: 1) {
+                    Slider(value: Binding(
+                        get: { (history.time ?? now).timeIntervalSince1970 },
+                        set: { v in
+                            history.stop()
+                            // Snap to 10 minutes; the right end is "now".
+                            let t = (v / 600).rounded() * 600
+                            history.show(t >= now.timeIntervalSince1970 - 600 ? nil : Date(timeIntervalSince1970: t), model: model)
+                        }), in: start.timeIntervalSince1970...now.timeIntervalSince1970)
+                    HistoryMarks(marks: history.marks, start: start, end: now, model: model) { t in
                         history.stop()
-                        // Snap to 10 minutes; the right end is "now".
-                        let t = (v / 600).rounded() * 600
-                        history.show(t >= now.timeIntervalSince1970 - 600 ? nil : Date(timeIntervalSince1970: t), model: model)
-                    }), in: start.timeIntervalSince1970...now.timeIntervalSince1970)
+                        history.show(t, model: model)
+                    }
+                }
                 if history.loading { ProgressView().controlSize(.small) }
                 Text(history.time.map { $0.formatted(.dateTime.day().month(.abbreviated).hour().minute()) } ?? "Сейчас")
                     .font(.callout.weight(.semibold)).monospacedDigit()
@@ -713,6 +734,15 @@ struct HistoryBar: View {
                 }
                 .disabled(history.time == nil)
             }
+            if !history.marks.isEmpty {
+                HStack(spacing: 12) {
+                    markLegend(.red, "падение")
+                    markLegend(.orange, "предупреждение")
+                    markLegend(.secondary, "перезагрузка")
+                    Text("нажмите на метку, чтобы перейти к моменту").foregroundStyle(.secondary)
+                }
+                .font(.caption)
+            }
             if history.time != nil {
                 Text("Показано, как было: связи, задержки, проблемы, процессор и сайты. Маршруты, клиенты и трафик приложение видит только сейчас.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -720,6 +750,58 @@ struct HistoryBar: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private func markLegend(_ color: Color, _ text: String) -> some View {
+        HStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 1).fill(color).frame(width: 3, height: 9)
+            Text(text).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Ticks under the history slider: where problems began and servers
+/// rebooted. A tick jumps the map to that moment.
+@MainActor
+struct HistoryMarks: View {
+    var marks: [HistoryMark]
+    var start: Date
+    var end: Date
+    var model: AppModel
+    var jump: (Date) -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            // The slider's track is inset by about half its knob.
+            let inset: CGFloat = 8
+            let width = max(1, geo.size.width - inset * 2)
+            let span = max(1, end.timeIntervalSince(start))
+            ForEach(Array(marks.enumerated()), id: \.offset) { _, m in
+                let x = inset + width * CGFloat(m.time.timeIntervalSince(start) / span)
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(color(m.kind))
+                    .frame(width: 3, height: 9)
+                    .frame(width: 9, height: 12)
+                    .contentShape(Rectangle())
+                    .position(x: x, y: 6)
+                    .onTapGesture { jump(m.time) }
+                    .help(help(m))
+            }
+        }
+        .frame(height: 12)
+    }
+
+    private func color(_ k: HistoryMark.Kind) -> Color {
+        switch k {
+        case .down: return .red
+        case .warning: return .orange
+        case .reboot: return .secondary
+        }
+    }
+
+    private func help(_ m: HistoryMark) -> String {
+        let name = model.status(m.serverID)?.server.name ?? m.serverID
+        return m.time.formatted(date: .abbreviated, time: .shortened) + " · " + name + "\n" + m.message
     }
 }
 #endif

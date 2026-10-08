@@ -12,6 +12,8 @@ struct EditSheetView: View {
         switch sheet {
         case .addServer:
             AddServerForm(model: model)
+        case .addServerAt(let host):
+            AddServerForm(model: model, prefillHost: host)
         case .editServer(let id):
             if let s = model.status(id) { ServerEditForm(model: model, original: s.server) }
             else { Missing(title: "Сервер уже удалён") }
@@ -365,6 +367,8 @@ struct ServerEditForm: View {
 struct AddServerForm: View {
     @ObservedObject var model: AppModel
     var reinstall: ServerConfig?
+    /// An address to start with, e.g. an unknown node from the map.
+    var prefillHost: String? = nil
     @Environment(\.dismiss) private var dismiss
     @AppStorage("sshUser.default") private var defaultUser = "root"
 
@@ -580,6 +584,10 @@ struct AddServerForm: View {
     private func prefill() {
         keys = SSHKeys.list()
         if !canInstall && reinstall == nil { mode = .existing }
+        if reinstall == nil, let h = prefillHost, host.isEmpty {
+            host = h
+            applySSHConfig()
+        }
         guard let r = reinstall else { return }
         host = r.host
         name = r.name

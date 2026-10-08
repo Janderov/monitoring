@@ -200,6 +200,12 @@ struct ExternalInspector: View {
                         Text(ExternalPin.describeFrom(h, model) + " · порт " + h.ports.map(String.init).joined(separator: ", ")
                              + " · соединений: \(h.connections)")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        if model.can(.editConfig) {
+                            // The address goes straight into the add-server form.
+                            Button("Добавить как сервер…") { model.present(.addServerAt(h.ip)) }
+                                .controlSize(.small)
+                                .padding(.top, 2)
+                        }
                     }
                     .font(.callout)
                 }

@@ -50,13 +50,16 @@ struct VPNClientSpot: Hashable, Identifiable {
     }
 }
 
-/// VPN clients of one country: one pin with a count, a line to each server
-/// they use.
+/// VPN clients of one country (or one city): one pin with a count, a line
+/// to each server they use.
 struct ClientPin: Identifiable {
     var country: Country
     var coordinate: CLLocationCoordinate2D
     var clients: [VPNClientSpot]
-    var id: String { ClientPin.prefix + country.code }
+    /// Set when the clients are grouped by city.
+    var city: String? = nil
+    var id: String { ClientPin.prefix + country.code + (city.map { "-" + $0 } ?? "") }
+    var title: String { city ?? country.name }
 
     static let prefix = "clients-"
 
@@ -66,10 +69,18 @@ struct ClientPin: Identifiable {
 
     /// Grouped by the country of each client's address; nudged off server
     /// pins in the same city (to the south-east, unknown nodes go north).
+    /// With `cities`, clients whose city is known stand in that city.
     static func group(_ spots: [VPNClientSpot], owners: [String: IPOwner],
-                      avoiding pins: [CLLocationCoordinate2D]) -> [ClientPin] {
+                      avoiding pins: [CLLocationCoordinate2D], cities: [String: IPCity]? = nil) -> [ClientPin] {
         var byCountry: [String: ClientPin] = [:]
         for c in spots {
+            if let city = cities?[c.ip], let country = Country.known.first(where: { $0.code == city.country })
+                ?? Country.known.first(where: { $0.code == owners[c.ip]?.country }) {
+                let key = country.code + "|" + city.city
+                let at = CLLocationCoordinate2D(latitude: city.latitude, longitude: city.longitude)
+                byCountry[key, default: ClientPin(country: country, coordinate: at, clients: [], city: city.city)].clients.append(c)
+                continue
+            }
             guard let code = owners[c.ip]?.country,
                   let country = Country.known.first(where: { $0.code == code }) else { continue }
             let base = country.coordinate
@@ -86,6 +97,20 @@ struct ClientPinView: View {
     var pin: ClientPin
 
     var body: some View {
+        ZStack {
+            // By city: a pale spot that grows with the number of clients.
+            if pin.city != nil {
+                Circle()
+                    .fill(RouteStyle.clientTint.opacity(0.16))
+                    .frame(width: spot, height: spot)
+            }
+            badge
+        }
+    }
+
+    private var spot: CGFloat { 26 + CGFloat(pin.clients.count).squareRoot() * 14 }
+
+    private var badge: some View {
         HStack(spacing: 3) {
             Image(systemName: "person.fill").font(.system(size: 9, weight: .semibold))
             Text("\(pin.clients.count)").font(.caption2.weight(.bold)).monospacedDigit()
@@ -95,7 +120,7 @@ struct ClientPinView: View {
         .background(pin.activeCount > 0 ? RouteStyle.clientTint : Color.gray, in: Capsule())
         .overlay(Capsule().strokeBorder(.white, lineWidth: 1.5))
         .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
-        .help("\(pin.country.name): клиентов \(pin.clients.count), сейчас в сети \(pin.activeCount)")
+        .help("\(pin.title): клиентов \(pin.clients.count), сейчас в сети \(pin.activeCount)")
     }
 }
 
@@ -109,8 +134,8 @@ struct ClientsInspector: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Клиенты VPN · \(pin.country.name)", systemImage: "person.2").font(.headline)
-                    Text("Сейчас в сети \(pin.activeCount) из \(pin.clients.count). Страна определена по адресу, с которого ключ подключался последний раз.")
+                    Label("Клиенты VPN · \(pin.title)", systemImage: "person.2").font(.headline)
+                    Text("Сейчас в сети \(pin.activeCount) из \(pin.clients.count). " + (pin.city == nil ? "Страна определена" : "Город определён") + " по адресу, с которого ключ подключался последний раз.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 ForEach(pin.clients.sorted { ($0.active ? 0 : 1, $0.title) < ($1.active ? 0 : 1, $1.title) }) { c in

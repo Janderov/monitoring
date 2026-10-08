@@ -364,6 +364,34 @@ type sampler struct {
 	// refreshed at most once a minute even when sampling is faster.
 	dbAt    time.Time
 	dbCache []collect.Database
+	// Host care changes slowly and reads log files: every 5 minutes.
+	careAt    time.Time
+	careCache care
+}
+
+type care struct {
+	system  collect.System
+	ssh     *collect.SSHLog
+	sshErr  string
+	backups []collect.Backup
+}
+
+// authLogs: Ubuntu's rsyslog file, or the RHEL name. The agent reads it
+// through the adm group (install.sh adds it).
+var authLogs = []string{"/var/log/auth.log", "/var/log/secure"}
+
+func (s *sampler) care(now time.Time) care {
+	if now.Sub(s.careAt) < 5*time.Minute {
+		return s.careCache
+	}
+	c := care{system: collect.ReadSystem("/"), backups: collect.ReadBackups(collect.BackupDir, "/etc/cron.d")}
+	if l, err := collect.ReadSSH(authLogs, now); err != nil {
+		c.sshErr = "ssh log: " + err.Error()
+	} else {
+		c.ssh = &l
+	}
+	s.careCache, s.careAt = c, now
+	return c
 }
 
 func (s *sampler) databases(containers []collect.Container, now time.Time) []collect.Database {
@@ -402,6 +430,12 @@ func (s *sampler) sample(ctx context.Context) collect.Snapshot {
 		snap.VPN = s.docker.VPN(snap.Containers, now)
 	}
 	snap.Databases = s.databases(snap.Containers, now)
+	c := s.care(now)
+	sys := c.system
+	snap.System, snap.SSH, snap.Backups = &sys, c.ssh, c.backups
+	if c.sshErr != "" {
+		snap.Errors = append(snap.Errors, c.sshErr)
+	}
 	snap.Services = probe.Services(s.procRoot, s.services)
 	snap.Links = links.Collect(s.linkSources(snap.Containers), map[int]bool{s.listenPort: true})
 	if f := flows.Read(s.flowsFile, now, s.flowsMaxAge); f != nil {

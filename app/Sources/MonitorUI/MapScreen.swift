@@ -1,4 +1,5 @@
 #if canImport(SwiftUI) && canImport(AppKit)
+import AppKit
 import MapKit
 import MonitorCore
 import SwiftUI
@@ -13,21 +14,32 @@ struct MapScreen: View {
     @ObservedObject private var external: ExternalOwners
     @ObservedObject private var probes: MacProbeModel
     @ObservedObject private var siteHosts: SiteHostsModel
+    @ObservedObject private var clientCities: ClientCities
+    @ObservedObject private var soon: SoonModel
     @StateObject private var history = MapHistoryModel()
-    @State private var showHistory = false
+    @State private var mode: MapMode = .now
+    @State private var tab: InspectorTab = .summary
+    /// The server switched off "on paper" in the Разбор mode.
+    @State private var whatIfID: String?
     @State private var position: MapCameraPosition = .automatic
     @State private var center: CLLocationCoordinate2D?
+    @State private var region: MKCoordinateRegion?
     @State private var selectedPin: String?
+    // Layers. Only servers, links, VPN routes and this Mac are on by default,
+    // so the map stays calm; the rest is in the "Слои" menu. Keys with ".v2"
+    // started over when the layers moved into the menu.
     @AppStorage("map.links") private var showLinks = true
     @AppStorage("map.routes") private var showRoutes = true
     @AppStorage("map.onlyProblems") private var onlyProblems = false
     @AppStorage("map.mac") private var showMac = true
     @AppStorage("map.external") private var showExternal = true
-    @AppStorage("map.clients") private var showClients = true
-    @AppStorage("map.traffic") private var showTraffic = true
-    @AppStorage("map.sites") private var showSites = true
-    @AppStorage("map.load") private var showLoad = true
-    @AppStorage("map.macChecks") private var showMacChecks = true
+    @AppStorage("map.clients.v2") private var showClients = false
+    @AppStorage("map.clientsByCity") private var clientsByCity = true
+    @AppStorage("map.traffic.v2") private var showTraffic = false
+    @AppStorage("map.sites.v2") private var showSites = false
+    @AppStorage("map.load.v2") private var showLoad = false
+    @AppStorage("map.macChecks.v2") private var showMacChecks = false
+    @AppStorage("map.soon") private var showSoon = true
 
     init(model: AppModel) {
         self.model = model
@@ -36,7 +48,11 @@ struct MapScreen: View {
         self.external = model.external
         self.probes = model.probes
         self.siteHosts = model.siteHosts
+        self.clientCities = model.clientCities
+        self.soon = model.soon
     }
+
+    private var showHistory: Bool { mode == .history }
 
     /// Servers sharing a place become one pin with a number.
     private struct Pin: Identifiable {
@@ -83,12 +99,15 @@ struct MapScreen: View {
         var chains: [NetworkChain]
         var chosen: NetworkChain?
         var clusters: [SiteCluster]
+        var whatIf: WhatIfDraw?
     }
 
     private func scene() -> Scene {
         let pins = pins
         let live = !inPast
-        let routes: [VPNRoute] = showRoutes && live ? model.routes : []
+        let whatIf = mode == .diagnose ? whatIfID.map { WhatIfDraw(off: $0, impact: impact(of: $0)) } : nil
+        // "What if" shows the broken routes even with the layer off.
+        let routes: [VPNRoute] = (showRoutes || whatIf != nil) && live ? model.routes : []
         let macRoutes: [MacRoute] = showMac && live ? mac.routes(model.statuses) : []
         var hops: [ExternalHop] = []
         if showExternal && live {
@@ -100,10 +119,24 @@ struct MapScreen: View {
         return Scene(pins: pins, routes: routes, macAt: macCoordinate(pins), macRoutes: macRoutes, hops: hops,
                      extPins: ExternalPin.group(hops, owners: external.owners, avoiding: taken),
                      spots: spots,
-                     clientPins: ClientPin.group(spots, owners: external.owners, avoiding: taken),
+                     clientPins: ClientPin.group(spots, owners: external.owners, avoiding: taken,
+                                                 cities: clientsByCity ? clientCities.cities : nil),
                      chains: chains,
                      chosen: chains.first { PathKey.id($0) == selectedPin },
-                     clusters: showSites ? siteClusters(pins) : [])
+                     clusters: showSites ? siteClusters(pins) : [],
+                     whatIf: whatIf)
+    }
+
+    /// What breaks without the server: every path and client, whatever the
+    /// layers show.
+    private func impact(of off: String) -> WhatIfImpact {
+        let chains = NetworkChains.build(macID: MacLinksModel.pinID, macRoutes: mac.routes(model.statuses),
+                                         routes: model.routes)
+        var checks: [String: [String]] = [:]
+        for s in model.sites { checks[s.id] = s.origins.map(\.serverID) }
+        return WhatIf.impact(off: off, chains: chains,
+                             clients: VPNClientSpot.compute(model).map { (serverID: $0.serverID, active: $0.active) },
+                             siteHosts: siteHosts.server, siteChecks: checks)
     }
 
     var body: some View {
@@ -121,12 +154,35 @@ struct MapScreen: View {
 
     private func content(_ d: Scene) -> some View {
         HStack(spacing: 0) {
-            ZStack(alignment: .topLeading) {
-                mapView(d)
-                layers
-                    .padding(12)
+            mapView(d)
+                .overlay(alignment: .top) { modeBanner }
+                .overlay(alignment: .topTrailing) { wallExit }
+            if !model.wallMode {
+                inspector(d)
             }
-            inspector(pins: d.pins, clientPins: d.clientPins, extPins: d.extPins, chosen: d.chosen, clusters: d.clusters)
+        }
+    }
+
+    /// One line on what the Разбор mode is for.
+    @ViewBuilder
+    private var modeBanner: some View {
+        if mode == .diagnose, !model.wallMode {
+            Text(whatIfID == nil
+                 ? "Разбор: выберите сервер, справа откроются проверки"
+                 : "Сервер выключен понарошку: красным то, что перестанет работать")
+                .font(.callout)
+                .padding(.horizontal, 12).padding(.vertical, 5)
+                .background(.regularMaterial, in: Capsule())
+                .padding(10)
+        }
+    }
+
+    @ViewBuilder
+    private var wallExit: some View {
+        if model.wallMode {
+            Button("Выйти из режима стены") { WallMode.set(false, model: model) }
+                .keyboardShortcut(.cancelAction)
+                .padding(12)
         }
     }
 
@@ -140,22 +196,25 @@ struct MapScreen: View {
             MapCompass()
             MapScaleView()
         }
-        .onMapCameraChange { ctx in center = ctx.region.center }
+        .onMapCameraChange { ctx in
+            center = ctx.region.center
+            region = ctx.region
+        }
         .overlay(alignment: .bottom) { historyOverlay }
     }
 
     @MapContentBuilder
     private func mapContent(_ d: Scene) -> some MapContent {
-        linkLayers()
+        linkLayers(d.whatIf)
         pathLayer(d.chosen, mac: d.macAt)
-        routeLayer(d.routes, chains: d.chains)
-        macRouteLayer(d.macRoutes, from: d.macAt, chains: d.chains)
+        routeLayer(d.routes, chains: d.chains, whatIf: d.whatIf)
+        macRouteLayer(d.macRoutes, from: d.macAt, chains: d.chains, whatIf: d.whatIf)
         macCheckLayer(d.macAt)
-        clientLayer(d.clientPins)
+        clientLayer(d.clientPins, whatIf: d.whatIf)
         externalLayer(d.extPins, mac: d.macAt)
         siteLayer(d.clusters)
         macPin(d.macAt)
-        serverPins(d.pins)
+        serverPins(d.pins, whatIf: d.whatIf)
     }
 
     @ViewBuilder
@@ -170,17 +229,27 @@ struct MapScreen: View {
     @ToolbarContentBuilder
     private var toolbarItems: some ToolbarContent {
         ToolbarItem {
-            Picker("Показать", selection: $onlyProblems) {
-                Text("Все").tag(false)
-                Text("Только проблемы").tag(true)
+            Picker("Режим", selection: $mode) {
+                ForEach(MapMode.allCases) { m in Text(m.title).tag(m) }
             }
             .pickerStyle(.segmented)
+            .help("Сейчас: как есть. История: последние 30 дней. Разбор: что если, проверки из городов, где теряются пакеты")
+        }
+        ToolbarItem { layersMenu }
+        ToolbarItem {
+            Menu {
+                Button("Скопировать снимок") { takePicture(save: false) }
+                Button("Сохранить снимок…") { takePicture(save: true) }
+            } label: {
+                Label("Снимок", systemImage: "camera")
+            }
+            .help("Снимок карты с подписями")
         }
         ToolbarItem {
-            Toggle(isOn: $showHistory) {
-                Label("История", systemImage: "clock.arrow.circlepath")
+            Button { WallMode.set(true, model: model) } label: {
+                Label("Стена", systemImage: "rectangle.inset.filled")
             }
-            .help("Карта за последние 30 дней")
+            .help("Карта на весь экран без панелей. Выйти: Esc")
         }
         ToolbarItem {
             Button { withAnimation { position = .automatic } } label: {
@@ -188,6 +257,88 @@ struct MapScreen: View {
             }
             .help("Показать все серверы")
         }
+    }
+
+    /// Every layer in one menu instead of checkboxes over the map.
+    private var layersMenu: some View {
+        Menu {
+            Section("Пути") {
+                Toggle("Связи и задержки", isOn: $showLinks)
+                Toggle("Маршруты VPN", isOn: $showRoutes)
+                if showRoutes, model.routes.isEmpty, noRoutesReason != nil {
+                    Text("Каскадов не видно. Если они есть, нажмите «Обновить агентов»")
+                }
+                Toggle("Трафик на линиях", isOn: $showTraffic)
+                Toggle("Этот Mac", isOn: $showMac)
+                Toggle("Проверка с этого Mac", isOn: $showMacChecks).disabled(!showMac)
+            }
+            Section("Люди и сайты") {
+                Toggle("Клиенты VPN", isOn: $showClients)
+                Toggle("Клиенты по городам", isOn: $clientsByCity).disabled(!showClients)
+                Toggle("Сайты", isOn: $showSites)
+                Toggle("Чужие узлы", isOn: $showExternal)
+            }
+            Section("На булавках") {
+                Toggle("Загрузка процессора", isOn: $showLoad)
+                Toggle("Значок «скоро»", isOn: $showSoon)
+            }
+            Divider()
+            Toggle("Только проблемы", isOn: $onlyProblems)
+        } label: {
+            Label("Слои", systemImage: "square.3.layers.3d")
+        }
+        .help("Что показывать на карте")
+    }
+
+    /// Draws the map with its pins and lines into a picture: copied, or saved
+    /// to a file.
+    private func takePicture(save: Bool) {
+        let picture = makePicture()
+        Task {
+            guard let image = await picture.render() else { return }
+            if save { MapPicture.save(image) } else { MapPicture.copy(image) }
+        }
+    }
+
+    private func makePicture() -> MapPicture {
+        let d = scene()
+        var lines: [MapPicture.Line] = []
+        if showLinks, !inPast {
+            for l in model.links {
+                guard let a = locations.coordinate(for: l.from), let b = locations.coordinate(for: l.to) else { continue }
+                lines.append(.init(from: a, to: b, color: l.check.ok ? .systemGray : .systemRed, width: 1.5, dashed: !l.check.ok))
+            }
+        }
+        for r in d.routes {
+            guard let a = coordinate(r.fromID), let b = coordinate(r.toID) else { continue }
+            lines.append(.init(from: a, to: b, color: .systemIndigo, width: 3.5, dashed: r.kind == .relay))
+        }
+        for r in d.macRoutes {
+            let a = r.viaID.flatMap { coordinate($0) } ?? d.macAt
+            guard let b = coordinate(r.toID) else { continue }
+            lines.append(.init(from: a, to: b, color: .systemTeal, width: 3, dashed: false))
+        }
+        var dots = d.pins.map { MapPicture.Dot(at: $0.coordinate, name: $0.title, color: NSColor(level(of: $0).color)) }
+        if showMac { dots.append(.init(at: d.macAt, name: "Этот Mac", color: .systemTeal)) }
+        var caption = "Карта серверов · " + Date().formatted(date: .abbreviated, time: .shortened)
+        if inPast, let t = history.time { caption += " · как было " + t.formatted(date: .abbreviated, time: .shortened) }
+        return MapPicture(region: region ?? Self.fit(dots.map(\.at)), dots: dots, lines: lines, caption: caption)
+    }
+
+    /// The area around all points, for a picture before the map has moved.
+    private static func fit(_ points: [CLLocationCoordinate2D]) -> MKCoordinateRegion {
+        guard let first = points.first else {
+            return MKCoordinateRegion(center: .init(latitude: 50, longitude: 20),
+                                      span: .init(latitudeDelta: 50, longitudeDelta: 120))
+        }
+        var minLat = first.latitude, maxLat = first.latitude, minLon = first.longitude, maxLon = first.longitude
+        for p in points {
+            minLat = min(minLat, p.latitude); maxLat = max(maxLat, p.latitude)
+            minLon = min(minLon, p.longitude); maxLon = max(maxLon, p.longitude)
+        }
+        return MKCoordinateRegion(center: .init(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2),
+                                  span: .init(latitudeDelta: min(170, max(10, (maxLat - minLat) * 1.4)),
+                                              longitudeDelta: min(360, max(20, (maxLon - minLon) * 1.3))))
     }
 
     /// Background work while the map is open: the Mac's connections and
@@ -208,11 +359,18 @@ struct MapScreen: View {
             .onChange(of: model.siteConfigs, initial: true) { _, sites in
                 siteHosts.refresh(sites: sites, servers: model.statuses.map(\.server))
             }
-            .onChange(of: showHistory) { _, on in
-                if !on {
+            .onChange(of: mode) { _, m in
+                if m != .history {
                     history.stop()
                     history.show(nil, model: model)
+                } else {
+                    history.loadMarks(model: model)
                 }
+                if m == .diagnose { tab = .checks } else { whatIfID = nil }
+            }
+            .onChange(of: model.statuses.map(\.id), initial: true) { _, _ in soon.refresh(model) }
+            .onDisappear {
+                if model.wallMode { WallMode.set(false, model: model) }
             }
     }
 
@@ -224,7 +382,11 @@ struct MapScreen: View {
         let pins = d.pins
         return v
             .onChange(of: siteIPs) { _, ips in external.request(ips) }
-            .onChange(of: clientIPs, initial: true) { _, ips in external.request(ips, first: true) }
+            .onChange(of: clientIPs, initial: true) { _, ips in
+                external.request(ips, first: true)
+                if clientsByCity { clientCities.request(ips) }
+            }
+            .onChange(of: clientsByCity) { _, on in if on { clientCities.request(clientIPs) } }
             .onChange(of: hopIPs, initial: true) { _, ips in external.request(ips) }
             .onAppear {
                 locations.resetMovedOnce(model.visible.map(\.server))
@@ -236,9 +398,12 @@ struct MapScreen: View {
     }
 
     @ViewBuilder
-    private func inspector(pins: [Pin], clientPins: [ClientPin], extPins: [ExternalPin],
-                           chosen: NetworkChain?, clusters: [SiteCluster]) -> some View {
-        if let chain = chosen {
+    private func inspector(_ d: Scene) -> some View {
+        let pins = d.pins
+        let clientPins = d.clientPins
+        let extPins = d.extPins
+        let clusters = d.clusters
+        if let chain = d.chosen {
             Divider()
             PathInspector(model: model, probes: probes, external: external, chain: chain)
                 .frame(width: 300)
@@ -263,7 +428,8 @@ struct MapScreen: View {
                 .frame(width: 300)
         } else if let id = selectedPin, let pin = pins.first(where: { $0.id == id }) {
             Divider()
-            MapInspector(model: model, probes: probes, statuses: pin.statuses, center: center)
+            MapInspector(model: model, probes: probes, statuses: pin.statuses, center: center,
+                         tab: $tab, whatIf: d.whatIf, whatIfID: $whatIfID, mode: $mode)
                 .frame(width: 300)
         } else if !unplaced.isEmpty {
             Divider()
@@ -273,9 +439,9 @@ struct MapScreen: View {
     }
 
     @MapContentBuilder
-    private func linkLayers() -> some MapContent {
+    private func linkLayers(_ whatIf: WhatIfDraw?) -> some MapContent {
         if inPast { pastLinkLayer() }
-        if !inPast { linkLayer() }
+        if !inPast { linkLayer(whatIf) }
     }
 
     /// Checks between servers at the moment the history shows.
@@ -300,13 +466,14 @@ struct MapScreen: View {
     }
 
     @MapContentBuilder
-    private func linkLayer() -> some MapContent {
+    private func linkLayer(_ whatIf: WhatIfDraw?) -> some MapContent {
         if showLinks {
             ForEach(model.links) { link in
                 if let a = locations.coordinate(for: link.from), let b = locations.coordinate(for: link.to) {
+                    let ok = link.check.ok && whatIf?.hits(link.from.id, link.to.id) != true
                     MapPolyline(coordinates: [a, b], contourStyle: .geodesic)
-                        .stroke(link.check.ok ? Color.secondary.opacity(0.6) : Color.red,
-                                style: StrokeStyle(lineWidth: 1.5, dash: link.check.ok ? [] : [5, 4]))
+                        .stroke(ok ? Color.secondary.opacity(0.6) : Color.red,
+                                style: StrokeStyle(lineWidth: 1.5, dash: ok ? [] : [5, 4]))
                 }
             }
             // One label per pair of servers, on the arc's middle.
@@ -326,17 +493,19 @@ struct MapScreen: View {
     }
 
     @MapContentBuilder
-    private func routeLayer(_ routes: [VPNRoute], chains: [NetworkChain]) -> some MapContent {
+    private func routeLayer(_ routes: [VPNRoute], chains: [NetworkChain], whatIf: WhatIfDraw?) -> some MapContent {
         ForEach(routes) { r in
             if let a = coordinate(r.fromID), let b = coordinate(r.toID), !same(a, b) {
                 let traffic = showTraffic ? Traffic.route(r, model: model) : nil
+                let cut = whatIf?.hits(r.fromID, r.toID) == true
+                let color = cut ? Color.red : RouteStyle.color(r)
                 // Straight on the map, so the arrow in the middle points along it.
                 MapPolyline(coordinates: [a, b], contourStyle: .straight)
-                    .stroke(RouteStyle.color(r),
+                    .stroke(color,
                             style: StrokeStyle(lineWidth: TrafficStyle.width(traffic?.rate, base: 3), lineCap: .round,
-                                               dash: r.kind == .relay ? [7, 5] : []))
+                                               dash: cut ? [3, 5] : (r.kind == .relay ? [7, 5] : [])))
                 Annotation("", coordinate: RouteStyle.midpoint(a, b), anchor: .center) {
-                    RouteArrow(color: RouteStyle.color(r), angle: RouteStyle.angle(a, b), size: 13,
+                    RouteArrow(color: color, angle: RouteStyle.angle(a, b), size: 13,
                                help: RouteStyle.describe(r, model) + "\nНажмите, чтобы увидеть весь путь",
                                label: routeLabel(traffic), labelHelp: routeLabelHelp(r, traffic)) {
                         selectPath(from: r.fromID, to: r.toID, chains)
@@ -443,17 +612,20 @@ struct MapScreen: View {
 
     @MapContentBuilder
     private func macRouteLayer(_ macRoutes: [MacRoute], from macAt: CLLocationCoordinate2D,
-                               chains: [NetworkChain]) -> some MapContent {
+                               chains: [NetworkChain], whatIf: WhatIfDraw?) -> some MapContent {
         ForEach(macRoutes) { r in
             // Through the Mac's VPN the hop starts at that server;
             // the Mac -> VPN server arrow is a route of its own.
             let a = r.viaID.flatMap { coordinate($0) } ?? macAt
             if let b = coordinate(r.toID), !same(a, b) {
                 let rate = showTraffic ? Traffic.mac(r, model: model) : nil
+                let cut = whatIf?.hits(r.viaID ?? MacLinksModel.pinID, r.toID) == true
+                let color = cut ? Color.red : RouteStyle.color(r)
                 MapPolyline(coordinates: [a, b], contourStyle: .straight)
-                    .stroke(RouteStyle.color(r), style: StrokeStyle(lineWidth: TrafficStyle.width(rate, base: 2.5), lineCap: .round))
+                    .stroke(color, style: StrokeStyle(lineWidth: TrafficStyle.width(rate, base: 2.5), lineCap: .round,
+                                                      dash: cut ? [3, 5] : []))
                 Annotation("", coordinate: RouteStyle.midpoint(a, b), anchor: .center) {
-                    RouteArrow(color: RouteStyle.color(r), angle: RouteStyle.angle(a, b), size: 12,
+                    RouteArrow(color: color, angle: RouteStyle.angle(a, b), size: 12,
                                help: RouteStyle.describe(r, model) + "\nНажмите, чтобы увидеть весь путь",
                                label: macLabel(rate), labelHelp: rate.map { TrafficStyle.detail($0, downIsTx: false) } ?? "") {
                         selectPath(from: r.viaID ?? MacLinksModel.pinID, to: r.toID, chains)
@@ -464,14 +636,16 @@ struct MapScreen: View {
     }
 
     @MapContentBuilder
-    private func clientLayer(_ clientPins: [ClientPin]) -> some MapContent {
+    private func clientLayer(_ clientPins: [ClientPin], whatIf: WhatIfDraw?) -> some MapContent {
         ForEach(clientPins) { pin in
             ForEach(pin.serverIDs, id: \.self) { sid in
                 if let b = coordinate(sid), !same(pin.coordinate, b) {
                     let rate = showTraffic ? Traffic.clients(pin, server: sid, model: model) : nil
+                    let cut = whatIf?.cutsClients(of: sid) == true
                     MapPolyline(coordinates: [pin.coordinate, b], contourStyle: .geodesic)
-                        .stroke(pin.active(to: sid) ? RouteStyle.clientTint.opacity(0.8) : Color.gray.opacity(0.4),
-                                style: StrokeStyle(lineWidth: TrafficStyle.width(rate, base: 1.5), lineCap: .round))
+                        .stroke(cut ? Color.red : (pin.active(to: sid) ? RouteStyle.clientTint.opacity(0.8) : Color.gray.opacity(0.4)),
+                                style: StrokeStyle(lineWidth: TrafficStyle.width(rate, base: 1.5), lineCap: .round,
+                                                   dash: cut ? [3, 5] : []))
                     if let rate, TrafficStyle.worthShowing(rate) {
                         Annotation("", coordinate: LinkPair.greatCircleMidpoint(pin.coordinate, b), anchor: .center) {
                             TrafficLabel(text: TrafficStyle.text(rate), tint: RouteStyle.clientTint,
@@ -528,13 +702,21 @@ struct MapScreen: View {
     }
 
     @MapContentBuilder
-    private func serverPins(_ pins: [Pin]) -> some MapContent {
+    private func serverPins(_ pins: [Pin], whatIf: WhatIfDraw?) -> some MapContent {
         ForEach(pins) { pin in
             Annotation(pin.title, coordinate: pin.coordinate, anchor: .center) {
-                PinView(level: level(of: pin), count: pin.statuses.count, load: load(of: pin))
+                PinView(level: level(of: pin), count: pin.statuses.count, load: load(of: pin),
+                        soon: soonBadge(pin), off: pin.statuses.contains { $0.id == whatIf?.off })
             }
             .tag(pin.id)
         }
+    }
+
+    /// The pin's yellow dot: a certificate, domain or disk runs out within two weeks.
+    private func soonBadge(_ pin: Pin) -> Bool {
+        guard showSoon, !inPast else { return false }
+        let now = Date()
+        return pin.statuses.contains { Soon.badge(soon.items(for: $0.id, model: model), now: now) }
     }
 
     /// Now, or at the moment the history shows.
@@ -551,77 +733,11 @@ struct MapScreen: View {
         return values.max()
     }
 
-    private var layers: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Toggle("Связи и задержки", isOn: $showLinks)
-            if showLinks, model.links.isEmpty, model.statuses.count > 1 {
-                hint("Серверы пока не проверяют друг друга, поэтому линий нет.")
-            }
-            Toggle("Маршруты VPN", isOn: $showRoutes)
-            if showRoutes, model.routes.isEmpty, let why = noRoutesReason {
-                hint(why)
-            }
-            if showRoutes {
-                HStack(spacing: 10) {
-                    routeLegend(dash: [], "туннель")
-                    routeLegend(dash: [4, 3], "пересылка")
-                }
-                .font(.caption)
-            }
-            Toggle("Клиенты VPN", isOn: $showClients)
-            Toggle("Чужие узлы", isOn: $showExternal)
-            Toggle("Сайты", isOn: $showSites)
-            Toggle("Загрузка процессора", isOn: $showLoad)
-            Toggle("Трафик на линиях", isOn: $showTraffic)
-            Toggle("Этот Mac", isOn: $showMac)
-            if showMac {
-                Toggle("Проверка с этого Mac", isOn: $showMacChecks)
-                    .padding(.leading, 16)
-            }
-            if showMac {
-                HStack(spacing: 4) {
-                    Path { p in p.move(to: .init(x: 0, y: 4)); p.addLine(to: .init(x: 18, y: 4)) }
-                        .stroke(RouteStyle.macTint, style: StrokeStyle(lineWidth: 2.5))
-                        .frame(width: 18, height: 8)
-                    Text("трафик с этого Mac").foregroundStyle(.secondary)
-                }
-                .font(.caption)
-            }
-            Divider()
-            HStack(spacing: 12) {
-                legend(.ok, "в норме")
-                legend(.warning, "внимание")
-                legend(.critical, "критично")
-            }
-            .font(.caption)
-        }
-        .toggleStyle(.checkbox)
-        .padding(10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
-        .fixedSize()
-    }
-
     /// Routes need agent 0.4+; an older agent and "no cascades" look the
     /// same in the snapshot, so the hint names both.
     private var noRoutesReason: String? {
         if model.statuses.allSatisfy({ $0.snapshot == nil }) { return nil }
         return "Каскадов между серверами не видно. Если они настроены, обновите агентов: кнопка «Обновить агентов» вверху окна."
-    }
-
-    private func hint(_ text: String) -> some View {
-        Text(text)
-            .font(.caption).foregroundStyle(.secondary)
-            .frame(width: 220, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func routeLegend(dash: [CGFloat], _ t: String) -> some View {
-        HStack(spacing: 4) {
-            Path { p in p.move(to: .init(x: 0, y: 4)); p.addLine(to: .init(x: 18, y: 4)) }
-                .stroke(RouteStyle.tint, style: StrokeStyle(lineWidth: 2.5, dash: dash))
-                .frame(width: 18, height: 8)
-            Text(t).foregroundStyle(.secondary)
-        }
     }
 
     private func coordinate(_ serverID: String) -> CLLocationCoordinate2D? {
@@ -630,10 +746,6 @@ struct MapScreen: View {
 
     private func same(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Bool {
         abs(a.latitude - b.latitude) < 0.01 && abs(a.longitude - b.longitude) < 0.01
-    }
-
-    private func legend(_ l: ServerStatus.Level, _ t: String) -> some View {
-        HStack(spacing: 4) { StatusDot(level: l); Text(t).foregroundStyle(.secondary) }
     }
 }
 
@@ -744,10 +856,17 @@ private struct PinView: View {
     var count: Int
     /// CPU in percent, drawn as a ring; nil hides the ring.
     var load: Double? = nil
+    /// Something runs out within two weeks: a small yellow dot.
+    var soon = false
+    /// Switched off "on paper" in the Разбор mode.
+    var off = false
 
     var body: some View {
         let size: CGFloat = count > 1 ? 22 : 14
         ZStack {
+            if off {
+                Circle().strokeBorder(Color.red, lineWidth: 2.5).frame(width: size + 18, height: size + 18)
+            }
             if level == .critical {
                 Circle().fill(level.color.opacity(0.18)).frame(width: 34, height: 34)
             }
@@ -769,33 +888,53 @@ private struct PinView: View {
             if count > 1 {
                 Text("\(count)").font(.caption2.weight(.bold)).foregroundStyle(.white)
             }
+            if soon {
+                Circle()
+                    .fill(Color.yellow)
+                    .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
+                    .frame(width: 9, height: 9)
+                    .offset(x: size / 2, y: -size / 2)
+            }
         }
-        .accessibilityLabel("\(count) серв., \(level.label)")
+        .accessibilityLabel("\(count) серв., \(level.label)" + (soon ? ", скоро истекает срок" : ""))
         .help(load.map { "Процессор \(Fmt.percent($0))" } ?? "")
     }
 }
 
-/// The panel next to the map for the selected pin.
+/// The panel next to the map for the selected pin, in three sections so
+/// each stays short: the summary, the paths through the server, and the
+/// checks (other servers, this Mac, Russian cities, "what if").
 private struct MapInspector: View {
     @ObservedObject var model: AppModel
     @ObservedObject var probes: MacProbeModel
     var statuses: [ServerStatus]
     var center: CLLocationCoordinate2D?
+    @Binding var tab: InspectorTab
+    var whatIf: WhatIfDraw?
+    @Binding var whatIfID: String?
+    @Binding var mode: MapMode
     /// The server whose pin is about to move to the map's center, and where.
     @State private var confirmMove: (id: String, to: CLLocationCoordinate2D)?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                ForEach(statuses) { s in serverBlock(s) }
+        VStack(alignment: .leading, spacing: 0) {
+            Picker("Раздел", selection: $tab) {
+                ForEach(InspectorTab.allCases) { t in Text(t.title).tag(t) }
             }
-            .padding(16)
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 12).padding(.top, 12)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(statuses) { s in serverBlock(s) }
+                }
+                .padding(16)
+            }
         }
     }
 
     private func serverBlock(_ s: ServerStatus) -> some View {
-        let reach = model.reachability(of: s.id)
-        return VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 StatusDot(level: s.level, size: 10)
                 Text(s.server.name).font(.headline).lineLimit(1)
@@ -803,63 +942,20 @@ private struct MapInspector: View {
             }
             Text([s.country?.name, s.server.group, s.server.host].compactMap { $0 }.joined(separator: " · "))
                 .font(.caption).foregroundStyle(.secondary)
+            switch tab {
+            case .summary: summary(s)
+            case .paths: paths(s)
+            case .checks: checks(s)
+            }
+        }
+    }
+
+    // MARK: Сводка
+
+    private func summary(_ s: ServerStatus) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(s.alerts, id: \.key) { a in
                 AlertStrip(level: a.severity.level, text: a.message, trailing: Fmt.since(a.since)).font(.callout)
-            }
-            if !reach.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Доступность с других серверов").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    ForEach(reach) { l in
-                        HStack {
-                            StatusDot(level: l.check.ok ? .ok : .critical)
-                            Text(l.from.name).lineLimit(1)
-                            Spacer(minLength: 6)
-                            Text(l.check.ok ? Fmt.ms(l.check.latencyMs) : "нет ответа")
-                                .foregroundStyle(l.check.ok ? Color.primary : Color.red).monospacedDigit()
-                        }
-                        .font(.callout)
-                    }
-                    if let verdict = verdict(s, reach) {
-                        Text(verdict).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            if let p = probes.probes[s.id] {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("С этого Mac").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    HStack {
-                        StatusDot(level: p.ok ? .ok : .critical)
-                        Text(p.throughVPN ? "через VPN" : "напрямую").lineLimit(1)
-                        Spacer(minLength: 6)
-                        Text(p.latencyMs.map(Fmt.ms) ?? "нет ответа")
-                            .foregroundStyle(p.ok ? Color.primary : Color.red).monospacedDigit()
-                    }
-                    .font(.callout)
-                    .help(MacCheck.help(p, s.server.name))
-                    if let verdict = macVerdict(p, reach) {
-                        Text(verdict).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            let routes = model.routes(of: s.id)
-            if !routes.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Маршруты VPN").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    ForEach(routes) { r in
-                        let outgoing = r.fromID == s.id
-                        let other = model.status(outgoing ? r.toID : r.fromID)?.server.name ?? (outgoing ? r.toID : r.fromID)
-                        HStack(alignment: .firstTextBaseline) {
-                            Image(systemName: outgoing ? "arrow.up.right" : "arrow.down.left")
-                                .foregroundStyle(RouteStyle.color(r))
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text((outgoing ? "выход через " : "вход с ") + other).lineLimit(1)
-                                Text(RouteStyle.detail(r)).font(.caption).foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .font(.callout)
-                    }
-                }
             }
             if let snap = s.snapshot {
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
@@ -872,6 +968,7 @@ private struct MapInspector: View {
                 }
                 .font(.callout).monospacedDigit()
             }
+            SoonSection(items: model.soon.items(for: s.id, model: model))
             HStack {
                 if model.can(.ssh, s.server) {
                     Button { model.openSSH(s.server) } label: { Label("SSH", systemImage: "terminal") }
@@ -896,6 +993,89 @@ private struct MapInspector: View {
                     Button("Переместить") { if let c = confirmMove { model.locations.set(c.to, for: c.id) } }
                 } message: {
                     Text("Точка сервера останется там, пока вы не нажмёте «Вернуть на место».")
+                }
+            }
+        }
+    }
+
+    // MARK: Пути
+
+    private func paths(_ s: ServerStatus) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            let routes = model.routes(of: s.id)
+            VStack(alignment: .leading, spacing: 4) {
+                PanelCaption(text: "Маршруты VPN")
+                if routes.isEmpty {
+                    Text("Через этот сервер каскадов не видно").font(.callout).foregroundStyle(.secondary)
+                }
+                ForEach(routes) { r in
+                    let outgoing = r.fromID == s.id
+                    let other = model.status(outgoing ? r.toID : r.fromID)?.server.name ?? (outgoing ? r.toID : r.fromID)
+                    HStack(alignment: .firstTextBaseline) {
+                        Image(systemName: outgoing ? "arrow.up.right" : "arrow.down.left")
+                            .foregroundStyle(RouteStyle.color(r))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text((outgoing ? "выход через " : "вход с ") + other).lineLimit(1)
+                            Text(RouteStyle.detail(r)).font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .font(.callout)
+                }
+            }
+            TraceSection(server: s.server, traces: model.traces, throughVPN: probes.probes[s.id]?.throughVPN ?? false)
+        }
+    }
+
+    // MARK: Проверки
+
+    private func checks(_ s: ServerStatus) -> some View {
+        let reach = model.reachability(of: s.id)
+        return VStack(alignment: .leading, spacing: 14) {
+            if !reach.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    PanelCaption(text: "С других серверов")
+                    ForEach(reach) { l in
+                        HStack {
+                            StatusDot(level: l.check.ok ? .ok : .critical)
+                            Text(l.from.name).lineLimit(1)
+                            Spacer(minLength: 6)
+                            Text(l.check.ok ? Fmt.ms(l.check.latencyMs) : "нет ответа")
+                                .foregroundStyle(l.check.ok ? Color.primary : Color.red).monospacedDigit()
+                        }
+                        .font(.callout)
+                    }
+                    if let verdict = verdict(s, reach) {
+                        Text(verdict).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            if let p = probes.probes[s.id] {
+                VStack(alignment: .leading, spacing: 4) {
+                    PanelCaption(text: "С этого Mac")
+                    HStack {
+                        StatusDot(level: p.ok ? .ok : .critical)
+                        Text(p.throughVPN ? "через VPN" : "напрямую").lineLimit(1)
+                        Spacer(minLength: 6)
+                        Text(p.latencyMs.map(Fmt.ms) ?? "нет ответа")
+                            .foregroundStyle(p.ok ? Color.primary : Color.red).monospacedDigit()
+                    }
+                    .font(.callout)
+                    .help(MacCheck.help(p, s.server.name))
+                    if let verdict = macVerdict(p, reach) {
+                        Text(verdict).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            CitySection(server: s.server, checks: model.cityChecks)
+            WhatIfSection(model: model, server: s.server,
+                          impact: whatIf?.off == s.id ? whatIf?.impact : nil,
+                          shown: whatIf?.off == s.id) {
+                if whatIfID == s.id {
+                    whatIfID = nil
+                } else {
+                    whatIfID = s.id
+                    mode = .diagnose
                 }
             }
         }

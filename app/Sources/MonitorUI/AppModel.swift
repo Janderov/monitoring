@@ -21,6 +21,8 @@ public final class AppModel: ObservableObject {
     @Published public var filter: Filter?
     /// The add or edit form shown over the main window.
     @Published public var sheet: EditSheet?
+    /// The map fills the screen: no sidebar, no toolbar, no panels.
+    @Published public var wallMode = false
     /// Admin key (Rutoken) state; nil until the backend has started.
     @Published public private(set) var admin: AdminLockStatus?
     /// Keeps the lock screen up after unlocking, while it asks to change the
@@ -41,6 +43,12 @@ public final class AppModel: ObservableObject {
     public let probes = MacProbeModel()
     /// Which server each site runs on, for the map.
     let siteHosts = SiteHostsModel()
+    /// The map's "Разбор" tools: checks from Russian cities, where packets
+    /// are lost, VPN clients' cities, what runs out soon.
+    let cityChecks = CityCheckModel()
+    let traces = TraceModel()
+    let clientCities = ClientCities()
+    let soon = SoonModel()
     /// Traffic of every VPN peer, from the counters in consecutive snapshots.
     @Published public private(set) var peerRates = RateMeter()
 
@@ -241,11 +249,14 @@ public final class AppModel: ObservableObject {
 
 public enum EditSheet: Identifiable, Hashable, Sendable {
     case addServer, editServer(String), reinstallAgent(String), updateAgents, addSite, editSite(String)
+    /// Add server with the address already filled in (an unknown node on the map).
+    case addServerAt(String)
     /// Server id and container name.
     case restartContainer(String, String), rebootServer(String)
     public var id: String {
         switch self {
         case .addServer: return "add-server"
+        case .addServerAt(let host): return "add-server-\(host)"
         case .editServer(let id): return "server-\(id)"
         case .reinstallAgent(let id): return "reinstall-\(id)"
         case .updateAgents: return "update-agents"
