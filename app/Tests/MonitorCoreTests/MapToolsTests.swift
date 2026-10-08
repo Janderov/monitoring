@@ -1,0 +1,143 @@
+import Foundation
+import XCTest
+@testable import MonitorCore
+
+final class MapToolsTests: XCTestCase {
+    let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+
+    func testWhatIfFollowsCascades() {
+        let chains = [
+            NetworkChain(nodes: ["mac", "nl", "us"], active: true),
+            NetworkChain(nodes: ["ru", "nl", "us"], active: true),
+            NetworkChain(nodes: ["mac", "ru"], active: true),
+        ]
+        let clients: [(serverID: String, active: Bool)] = [("nl", true), ("nl", false), ("ru", true), ("de", true)]
+        let us = WhatIf.impact(off: "us", chains: chains, clients: clients,
+                               siteHosts: ["shop": "ru"], siteChecks: ["shop": ["us", "nl"]])
+        XCTAssertEqual(us.brokenChains.count, 2)
+        // RU clients enter the RU -> NL -> US cascade; NL is not the start of any broken path.
+        XCTAssertEqual(us.clientsLost, 1)
+        XCTAssertEqual(us.clientsTotal, 4)
+        XCTAssertEqual(us.sites, [])
+        XCTAssertEqual(us.checks, ["shop"])
+        // From the Mac there is still Mac -> RU; from RU there is no other path.
+        XCTAssertEqual(us.hasBackup, false)
+
+        let nl = WhatIf.impact(off: "nl", chains: chains, clients: clients, siteHosts: [:], siteChecks: [:])
+        XCTAssertEqual(nl.clientsLost, 3)
+        XCTAssertEqual(nl.clientsLostOnline, 2)
+
+        let de = WhatIf.impact(off: "de", chains: chains, clients: clients, siteHosts: [:], siteChecks: [:])
+        XCTAssertTrue(de.brokenChains.isEmpty)
+        XCTAssertNil(de.hasBackup)
+        XCTAssertEqual(de.clientsLost, 1)
+
+        let withBackup = chains + [NetworkChain(nodes: ["ru", "de"], active: true)]
+        XCTAssertEqual(WhatIf.impact(off: "us", chains: withBackup, clients: [], siteHosts: [:], siteChecks: [:]).hasBackup, true)
+    }
+
+    func testCheckHostNodesAndResults() {
+        let nodes = Data("""
+        {"nodes": {
+          "ru1.node.check-host.net": {"asn": "AS1", "ip": "192.0.2.1", "location": ["ru", "Russia", "Moscow"]},
+          "ru4.node.check-host.net": {"asn": "AS2", "ip": "192.0.2.4", "location": ["ru", "Russia", "Ekaterinburg"]},
+          "de1.node.check-host.net": {"asn": "AS3", "ip": "192.0.2.9", "location": ["de", "Germany", "Nuremberg"]}
+        }}
+        """.utf8)
+        let ru = CheckHost.nodes(nodes)
+        XCTAssertEqual(ru.map(\.city), ["Ekaterinburg", "Moscow"])
+        XCTAssertEqual(ru.first?.country, "RU")
+
+        XCTAssertEqual(CheckHost.requestID(Data(#"{"ok":1,"request_id":"a1b2","nodes":{}}"#.utf8)), "a1b2")
+
+        let results = CheckHost.results(Data("""
+        {"ru1.node.check-host.net": [{"time": 0.048, "address": "203.0.113.10"}],
+         "ru4.node.check-host.net": [{"error": "Connection timed out"}],
+         "ru2.node.check-host.net": null,
+         "ru3.node.check-host.net": [[{"time": 0.31}]]}
+        """.utf8))
+        guard case .ok(let ms)? = results["ru1.node.check-host.net"] else { return XCTFail() }
+        XCTAssertEqual(ms, 48, accuracy: 0.01)
+        XCTAssertEqual(results["ru4.node.check-host.net"], .failed("Connection timed out"))
+        XCTAssertEqual(results["ru2.node.check-host.net"], .pending)
+        guard case .ok(let ms3)? = results["ru3.node.check-host.net"] else { return XCTFail() }
+        XCTAssertEqual(ms3, 310, accuracy: 0.01)
+        XCTAssertEqual(CheckHost.describe("Connection timed out"), "не отвечает")
+    }
+
+    func testTracerouteParseAndCulprit() {
+        let out = """
+        traceroute to 203.0.113.10 (203.0.113.10), 24 hops max, 52 byte packets
+         1  192.168.1.1  1.512 ms  1.201 ms  1.188 ms
+         2  * * *
+         3  198.51.100.1  9.120 ms  9.001 ms  8.950 ms
+         4  198.51.100.9  140.2 ms *  139.8 ms
+         5  203.0.113.10  148.0 ms *  147.1 ms !H
+        """
+        let hops = Traceroute.parse(out)
+        XCTAssertEqual(hops.map(\.number), [1, 2, 3, 4, 5])
+        XCTAssertEqual(hops[0].ip, "192.168.1.1")
+        XCTAssertEqual(hops[0].rtts.count, 3)
+        XCTAssertNil(hops[1].ip)
+        XCTAssertEqual(hops[1].loss, 1)
+        XCTAssertEqual(hops[3].lost, 1)
+        XCTAssertEqual(hops[4].averageMs ?? 0, 147.55, accuracy: 0.01)
+        // Hop 2 skips replies but hop 3 is fine: the loss starts at hop 4.
+        XCTAssertEqual(Traceroute.culprit(hops)?.number, 4)
+
+        let clean = Traceroute.parse(" 1  192.168.1.1  1.5 ms  1.2 ms  1.1 ms\n 2  203.0.113.10  40 ms  41 ms  40 ms")
+        XCTAssertNil(Traceroute.culprit(clean))
+    }
+
+    func testDiskForecast() {
+        // 1% a day for two weeks, from 60%.
+        let points = (0..<56).map { i in
+            (time: t0.addingTimeInterval(Double(i) * 6 * 3600), percent: 60 + Double(i) * 0.25)
+        }
+        let now = points.last!.time
+        let days = DiskForecast.daysUntilFull(points, now: now)
+        XCTAssertEqual(days ?? 0, (95 - 73.75) / 1, accuracy: 0.5)
+
+        let flat = points.map { (time: $0.time, percent: 50.0) }
+        XCTAssertNil(DiskForecast.daysUntilFull(flat, now: now))
+        XCTAssertNil(DiskForecast.daysUntilFull(Array(points.prefix(5)), now: points[4].time), "too little history")
+        let full = points.map { (time: $0.time, percent: 96.0) }
+        XCTAssertEqual(DiskForecast.daysUntilFull(full, now: now), 0)
+    }
+
+    func testSoonItems() {
+        let items = Soon.items(sites: [(name: "shop", tls: t0.addingTimeInterval(9 * 86400), domain: t0.addingTimeInterval(200 * 86400))],
+                               diskDays: 20, now: t0)
+        XCTAssertEqual(items.map(\.kind), [.tls, .disk])
+        XCTAssertTrue(Soon.badge(items, now: t0))
+        XCTAssertFalse(Soon.badge([SoonItem(kind: .disk, name: "диск", date: t0.addingTimeInterval(20 * 86400))], now: t0))
+    }
+
+    func testHistoryMarks() {
+        func ev(_ key: String, _ kind: AlertEvent.Kind, _ sev: Severity, _ at: TimeInterval) -> Store.LoggedEvent {
+            Store.LoggedEvent(serverID: "nl", time: t0.addingTimeInterval(at), key: key, kind: kind,
+                              severity: sev, message: key, actor: "system")
+        }
+        let events = [
+            ev("down", .fired, .critical, 300),
+            ev("down", .resolved, .critical, 400),
+            ev("reboot", .info, .warning, 100),
+            ev("ctr:web", .info, .warning, 150),
+            ev("disk", .fired, .warning, 200),
+            ev("disk", .reminder, .warning, 250),
+            ev("cpu", .fired, .warning, 9_000),
+        ]
+        let marks = MapMoment.marks(events, from: t0, to: t0.addingTimeInterval(1000))
+        XCTAssertEqual(marks.map(\.kind), [.reboot, .warning, .down])
+    }
+
+    func testIPWho() {
+        let city = IPWho.parse(Data("""
+        {"ip":"198.51.100.7","success":true,"city":"Kazan","country_code":"ru","latitude":55.79,"longitude":49.12}
+        """.utf8))
+        XCTAssertEqual(city?.city, "Kazan")
+        XCTAssertEqual(city?.country, "RU")
+        XCTAssertEqual(city?.latitude ?? 0, 55.79, accuracy: 0.001)
+        XCTAssertNil(IPWho.parse(Data(#"{"ip":"10.0.0.1","success":false,"message":"Reserved range"}"#.utf8)))
+    }
+}

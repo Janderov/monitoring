@@ -8,6 +8,7 @@ public struct MainWindow: View {
     @Environment(\.openWindow) private var openWindow
     public static let id = "main"
     @ObservedObject var model: AppModel
+    @State private var columns: NavigationSplitViewVisibility = .automatic
 
     public init(model: AppModel) { self.model = model }
 
@@ -25,7 +26,9 @@ public struct MainWindow: View {
     }
 
     private var content: some View {
-        NavigationSplitView {
+        // The map's wall mode hides the sidebar; the user's choice comes back after.
+        NavigationSplitView(columnVisibility: Binding(get: { model.wallMode ? .detailOnly : columns },
+                                                      set: { if !model.wallMode { columns = $0 } })) {
             Sidebar(model: model)
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } detail: {
@@ -59,6 +62,7 @@ public struct MainWindow: View {
                         .help("Настройки: обновления, токен GitHub, журнал действий")
                     }
                 }
+                .toolbar(model.wallMode ? .hidden : .automatic, for: .windowToolbar)
         }
     }
 
