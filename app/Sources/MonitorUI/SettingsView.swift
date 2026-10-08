@@ -2,15 +2,19 @@
 import MonitorCore
 import SwiftUI
 
-/// The app's Settings window (⌘,). A plain window rather than the SwiftUI
-/// Settings scene: a menu bar app has no app menu, and on macOS 14+ the
-/// Settings scene cannot be opened from code without SettingsLink.
+/// The app's settings (⌘,), a section of the main window like the others, so
+/// they open where the window is, full screen included.
 public struct SettingsView: View {
-    public static let id = "settings"
-
     @ObservedObject var model: AppModel
+    /// Shown in the main window's detail pane.
+    var embedded = false
 
     public init(model: AppModel) { self.model = model }
+
+    init(model: AppModel, embedded: Bool) {
+        self.model = model
+        self.embedded = embedded
+    }
 
     public var body: some View {
         if model.showsLockScreen {
@@ -31,7 +35,10 @@ public struct SettingsView: View {
             AdminKeySettings(model: model)
                 .tabItem { Label("Ключ администратора", systemImage: "key") }
         }
-        .frame(width: 520)
+        .frame(maxWidth: embedded ? 680 : 520)
+        .padding(embedded ? 20 : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .navigationTitle("Настройки")
     }
 }
 

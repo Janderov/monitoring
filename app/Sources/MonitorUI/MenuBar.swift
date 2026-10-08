@@ -210,8 +210,8 @@ public struct MenuBarContent: View {
             }
             MenuButton(title: "Открыть окно", shortcut: "⌘0") { openMain() }
             MenuButton(title: "Настройки…", shortcut: "⌘,") {
-                NSApp.activate(ignoringOtherApps: true)
-                openWindow(id: SettingsView.id)
+                model.showSettings()
+                openMain()
             }
             MenuButton(title: "Выйти", shortcut: "⌘Q") { NSApp.terminate(nil) }
         }
