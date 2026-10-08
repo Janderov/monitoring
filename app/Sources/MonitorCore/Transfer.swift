@@ -128,6 +128,7 @@ extension ConfigRepository {
             if !s.token.isEmpty { values[SecretKey.agentToken(s.id)] = s.token }
             if let p = try secretStore.get(SecretKey.sshPassword(s.id)) { values[SecretKey.sshPassword(s.id)] = p }
         }
+        if let h = try secretStore.get(SecretKey.heartbeat) { values[SecretKey.heartbeat] = h }
         for site in file.sites ?? [] where site.authUser != nil {
             if site.authLocked { throw SecretsLockedError() }
             if let p = site.authPassword { values[SecretKey.siteAuth(site.id)] = p }

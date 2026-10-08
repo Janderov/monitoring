@@ -40,6 +40,8 @@ public final class AppModel: ObservableObject {
     var notifyDirect: (@Sendable ([AlertEvent]) -> Void)?
     public let locations: ServerLocations
     public let updates: UpdateModel
+    /// The ping to an outside service after each round.
+    public let heartbeat: HeartbeatModel
     /// This Mac's own connections to the servers, for the map.
     public let mac = MacLinksModel()
     /// Country and network of addresses outside the app, for grey map pins.
@@ -98,6 +100,7 @@ public final class AppModel: ObservableObject {
         self.backend = backend
         self.locations = ServerLocations()
         self.updates = UpdateModel(secrets: KeychainSecrets(), backend: backend)
+        self.heartbeat = HeartbeatModel(secrets: KeychainSecrets())
         Task { await start() }
     }
 
@@ -112,6 +115,7 @@ public final class AppModel: ObservableObject {
                     self.peerRates = rates
                     self.statuses = list
                     self.lastRound = Date()
+                    self.heartbeat.roundDone(self)
                 }
             }, onSites: { [unowned self] list in
                 Task { @MainActor in self.siteStatuses = list }

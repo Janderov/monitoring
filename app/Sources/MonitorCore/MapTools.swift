@@ -363,6 +363,8 @@ public struct MorningSummary: Equatable, Sendable {
     public var title: String
     public var body: String
 
+    public init(title: String, body: String) { self.title = title; self.body = body }
+
     /// - Parameters:
     ///   - servers: each server's name and whether it is fine now.
     ///   - sites: how many sites answer now, of how many.

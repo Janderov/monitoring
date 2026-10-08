@@ -235,21 +235,25 @@ final class SoonModel: ObservableObject {
     private var checkedAt: Date?
 
     func refresh(_ model: AppModel) {
+        Task { await update(model) }
+    }
+
+    /// Recounts when the last count is half an hour old; the forecast
+    /// notifications call it too, so it works with every window closed.
+    func update(_ model: AppModel) async {
         if let c = checkedAt, Date().timeIntervalSince(c) < 1800 { return }
         checkedAt = Date()
         let ids = model.statuses.map(\.id)
         let backend = model.backend
-        Task {
-            let now = Date()
-            var out: [String: Double] = [:]
-            for id in ids {
-                let rows = (try? await backend.hourly(id, from: now.addingTimeInterval(-14 * 86400), to: now)) ?? []
-                if let d = DiskForecast.daysUntilFull(rows.map { (time: $0.hour, percent: $0.diskMax) }, now: now) {
-                    out[id] = d
-                }
+        let now = Date()
+        var out: [String: Double] = [:]
+        for id in ids {
+            let rows = (try? await backend.hourly(id, from: now.addingTimeInterval(-14 * 86400), to: now)) ?? []
+            if let d = DiskForecast.daysUntilFull(rows.map { (time: $0.hour, percent: $0.diskMax) }, now: now) {
+                out[id] = d
             }
-            diskDays = out
         }
+        diskDays = out
     }
 
     func items(for serverID: String, model: AppModel) -> [SoonItem] {
