@@ -109,9 +109,9 @@ private struct TransferSheet: View {
         defer { busy = false }
         error = nil
         do {
-            let backend = model.backend, password = password
+            let backend = model.backend, secret = password
             let data = try await backend.audited(.transfer, on: .app, detail: "экспорт") {
-                try await backend.exportTransfer(password: password)
+                try await backend.exportTransfer(password: secret)
             }
             let panel = NSSavePanel()
             let day = Date().formatted(.iso8601.year().month().day())
@@ -132,9 +132,9 @@ private struct TransferSheet: View {
         error = nil
         do {
             let file = try Data(contentsOf: url)
-            let backend = model.backend, password = password
+            let backend = model.backend, secret = password
             imported = try await backend.audited(.transfer, on: .app, detail: "импорт из \(url.lastPathComponent)") {
-                try await backend.importTransfer(file, password: password)
+                try await backend.importTransfer(file, password: secret)
             }
             password = ""
         } catch {
