@@ -264,6 +264,9 @@ public enum DataFolder {
     }
     public static var serversFile: URL { url.appendingPathComponent("servers.json") }
     public static var database: URL { url.appendingPathComponent("monitor.sqlite") }
+    /// The build replaced by the last update and the database as it was then.
+    public static var previousApp: URL { url.appendingPathComponent("Previous/Monitor.app", isDirectory: true) }
+    public static var previousDatabase: URL { url.appendingPathComponent("Previous/monitor.sqlite") }
 
     /// Creates the folder (owner-only) and an example servers.json if missing.
     public static func prepare() throws {

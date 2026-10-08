@@ -206,6 +206,13 @@ public actor Store {
                  e.error.map { .text($0) } ?? .null, .int(Int64(e.checkedAt.timeIntervalSince1970)))
     }
 
+    /// A consistent copy of the whole database in one file, made while the
+    /// app keeps running (before an update, for "Вернуть предыдущую").
+    public func copy(to url: URL) throws {
+        try? FileManager.default.removeItem(at: url)
+        try db.prepare("VACUUM INTO ?").run(.text(url.path))
+    }
+
     public func setValue(_ value: String?, for key: String) throws {
         if let value {
             try db.prepare("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)").run(.text(key), .text(value))

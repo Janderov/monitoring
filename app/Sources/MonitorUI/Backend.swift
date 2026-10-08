@@ -15,6 +15,8 @@ public protocol MonitorBackend: AnyObject, Sendable {
     /// Re-reads the server list and polls right away.
     func reload() async throws
     func pollNow() async
+    /// A copy of the database, made before an update.
+    func copyDatabase(to url: URL) async throws
     /// How often the screens refresh and the agents sample (Poller.refreshChoices).
     func setRefreshInterval(_ seconds: TimeInterval) async
     func samples(_ serverID: String, from: Date, to: Date) async throws -> [Store.Sample]
@@ -126,6 +128,12 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
 
     public func pollNow() async {
         await poller?.pollAll(now: Date())
+    }
+
+    public func copyDatabase(to url: URL) async throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try await store?.copy(to: url)
     }
 
     public func setRefreshInterval(_ seconds: TimeInterval) async {

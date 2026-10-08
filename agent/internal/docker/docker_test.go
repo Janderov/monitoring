@@ -1,10 +1,12 @@
 package docker
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestListOverUnixSocket(t *testing.T) {
@@ -43,5 +45,37 @@ func TestHealth(t *testing.T) {
 		if got := health(status); got != want {
 			t.Errorf("health(%q) = %q, want %q", status, got, want)
 		}
+	}
+}
+
+// A hung Docker costs one budget per sample, not 5 s for every call.
+func TestRoundBudget(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "docker.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skip("unix sockets unavailable:", err)
+	}
+	release := make(chan struct{})
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	})}
+	go srv.Serve(ln)
+	defer srv.Close()
+	defer close(release)
+
+	c := New(sock)
+	c.StartRound(200 * time.Millisecond)
+	start := time.Now()
+	if _, err := c.List(); !errors.Is(err, ErrBudget) {
+		t.Fatalf("first call: err = %v, want ErrBudget", err)
+	}
+	if _, err := c.Pid("x"); !errors.Is(err, ErrBudget) {
+		t.Fatalf("second call: err = %v, want ErrBudget", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("took %s, want about the budget", d)
 	}
 }

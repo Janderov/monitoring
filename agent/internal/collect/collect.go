@@ -17,6 +17,8 @@ import (
 type Snapshot struct {
 	Time     time.Time `json:"time"`
 	Hostname string    `json:"hostname"`
+	// AgentVersion lets the Mac see which agents need an update.
+	AgentVersion string `json:"agent_version,omitempty"`
 	// IntervalSeconds is how often the agent samples right now.
 	IntervalSeconds int         `json:"interval_s,omitempty"`
 	UptimeSeconds   float64     `json:"uptime_seconds"`

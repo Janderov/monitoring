@@ -50,10 +50,11 @@ public struct MainWindow: View {
                         }
                         .help("Добавить сервер или сайт")
                         if model.backend.canInstallAgent, model.can(.installAgent) {
+                            let outdated = model.statuses.filter { AgentBundle.outdated($0.snapshot) }.count
                             Button { model.present(.updateAgents) } label: {
-                                Label("Обновить агентов", systemImage: "arrow.down.circle")
+                                Label("Обновить агентов", systemImage: outdated > 0 ? "arrow.down.circle.fill" : "arrow.down.circle")
                             }
-                            .help("Обновить агентов на всех серверах")
+                            .help(outdated > 0 ? "Устаревших агентов: \(outdated)" : "Все агенты актуальны")
                         }
                         Button { model.showSettings() } label: {
                             Label("Настройки", systemImage: "gearshape")

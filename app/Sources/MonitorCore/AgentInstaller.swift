@@ -9,6 +9,22 @@ public enum AgentBundle {
         else { return nil }
         return dir
     }
+
+    /// Version of the bundled agent (agent/scripts/dist.sh writes VERSION).
+    public static let version: String? = version(in: url)
+
+    static func version(in dir: URL?) -> String? {
+        guard let dir, let text = try? String(contentsOf: dir.appendingPathComponent("VERSION"), encoding: .utf8)
+        else { return nil }
+        let v = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return v.isEmpty ? nil : v
+    }
+
+    /// Whether a server's agent should be updated to the bundled one.
+    public static func outdated(_ snapshot: Snapshot?, bundled: String? = AgentBundle.version) -> Bool {
+        guard let bundled, let snapshot else { return false }
+        return snapshot.agentVersion != bundled
+    }
 }
 
 public enum InstallStep: String, CaseIterable, Sendable {
@@ -141,6 +157,7 @@ public actor AgentInstaller {
                 \(sudo)bash \(dir)/install.sh --token-file \(dir)/token --port \(agentPort) --host \(Self.quote(host))
                 rc=$?; rm -rf \(dir); exit $rc
                 """, stdin: nil)
+            if out.status == 3, let why = Self.rollbackMessage(out.stdout) { throw InstallError(step, why) }
             guard out.status == 0 else {
                 let why = (out.stderr + out.stdout).split(whereSeparator: \.isNewline).last.map(String.init)
                 throw InstallError(step, "установка не удалась: \(why ?? "код \(out.status)")")
@@ -219,6 +236,22 @@ public actor AgentInstaller {
             throw SSHError("команда на сервере не выполнилась: \(why)")
         }
         return out
+    }
+
+    /// install.sh exits with 3 when the new agent did not stay up; its
+    /// "rollback:" lines carry the agent's log and whether the previous
+    /// version was put back.
+    static func rollbackMessage(_ stdout: String) -> String? {
+        let lines = stdout.split(whereSeparator: \.isNewline).map(String.init)
+            .filter { $0.hasPrefix("rollback:") }
+        guard !lines.isEmpty else { return nil }
+        let restored = lines.contains { $0.contains("restored") }
+        let log = lines.filter { $0.hasPrefix("rollback:   ") }
+            .map { $0.dropFirst("rollback:   ".count).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.suffix(4)
+        let head = restored ? "новая версия агента не запустилась, вернул прежнюю, сервер работает как раньше"
+                            : "агент не запустился"
+        return log.isEmpty ? head : head + ". Журнал агента: " + log.joined(separator: " / ")
     }
 
     static func keyValues(_ text: String, separator: Character = "=") -> [String: String] {

@@ -53,7 +53,7 @@ final class UpdaterTests: XCTestCase {
         XCTAssertEqual(u?.artifactID, 901)
         XCTAssertEqual(u?.version, "0.0.0-dev-cd6cb2f")
         XCTAssertEqual(u?.title, "Merge pull request #10")
-        XCTAssertTrue(h.requests[0].contains("branch=main&status=success"))
+        XCTAssertTrue(h.requests.contains { $0.contains("branch=main&status=success") })
     }
 
     func testUpToDate() async throws {

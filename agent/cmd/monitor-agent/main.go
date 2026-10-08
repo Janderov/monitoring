@@ -205,6 +205,7 @@ func cmdRun(args []string) error {
 	defer stop()
 
 	s := &sampler{
+		version:    version,
 		col:        collect.New(c.ProcRoot, listerOrNil(dk)),
 		docker:     dk,
 		procRoot:   c.ProcRoot,
@@ -349,6 +350,7 @@ func listerOrNil(dk *docker.Client) collect.ContainerLister {
 // sampler builds one full snapshot: host metrics, then VPN, local services
 // and remote checks.
 type sampler struct {
+	version  string
 	col      *collect.Collector
 	docker   *docker.Client
 	procRoot string
@@ -425,7 +427,11 @@ func (s *sampler) linkSources(containers []collect.Container) []links.Source {
 func (s *sampler) sample(ctx context.Context) collect.Snapshot {
 	now := time.Now()
 	every := s.pace.Get()
+	if s.docker != nil {
+		s.docker.StartRound(dockerBudget(every))
+	}
 	snap := s.col.Sample(now)
+	snap.AgentVersion = s.version
 	snap.IntervalSeconds = int(every / time.Second)
 	if s.docker != nil && snap.Containers != nil {
 		snap.VPN = s.docker.VPN(snap.Containers, now)
@@ -450,6 +456,12 @@ func (s *sampler) sample(ctx context.Context) collect.Snapshot {
 		cancel()
 	}
 	return snap
+}
+
+// dockerBudget is how long all Docker calls of one sample may take together:
+// half the interval, between 5 and 20 s.
+func dockerBudget(every time.Duration) time.Duration {
+	return min(max(every/2, 5*time.Second), 20*time.Second)
 }
 
 // sampleLoop takes one snapshot immediately, then one per interval, counted
