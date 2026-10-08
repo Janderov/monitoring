@@ -46,9 +46,10 @@ private struct GeneralSettings: View {
     @ObservedObject var model: AppModel
     @AppStorage("sshUser.default") private var sshUser = "root"
     @AppStorage(Poller.refreshDefaultsKey) private var refresh = Poller.interval
-    // Same keys as MorningDigest.
+    // Same keys as MorningDigest and Forecasts.
     @AppStorage("digest.enabled") private var digest = true
     @AppStorage("digest.hour") private var digestHour = 9
+    @AppStorage("forecast.enabled") private var forecast = true
     @Environment(\.openWindow) private var openWindow
     @State private var launch = false
     @State private var launchError: String?
@@ -86,18 +87,20 @@ private struct GeneralSettings: View {
                     Text(err).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Section("Утренняя сводка") {
-                Toggle("Присылать уведомление утром", isOn: $digest)
+            Section("Утренняя сводка и прогноз") {
+                Toggle("Присылать сводку утром", isOn: $digest)
+                Toggle("Присылать прогноз", isOn: $forecast)
                 Picker("Время", selection: $digestHour) {
                     ForEach(5...12, id: \.self) { h in Text(String(format: "%02d:00", h)).tag(h) }
                 }
-                .disabled(!digest)
-                Text("Как прошла ночь, что скоро истекает и что ждёт обслуживания. Если Мак спал, сводка придёт, когда он проснётся.")
+                .disabled(!digest && !forecast)
+                Text("Сводка: как прошла ночь. Прогноз: что скоро закончится или ждёт обслуживания (диск, SSL, домены, бэкапы, обновления безопасности), отдельным уведомлением, только если такое есть. То, до чего 2 дня или меньше, приходит сразу. Считается в фоне, окно открывать не нужно. Если Мак спал, всё придёт, когда он проснётся.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 LabeledContent("Мини-панель") {
                     Button("Открыть") { openWindow(id: MiniPanel.id) }
                 }
             }
+            HeartbeatSettings(model: model, heartbeat: model.heartbeat)
             Section("SSH") {
                 TextField("Пользователь по умолчанию", text: $sshUser)
                 Text("Пароли и ключи хранит Терминал и Связка ключей, приложение их не видит.")

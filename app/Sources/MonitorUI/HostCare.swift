@@ -289,6 +289,7 @@ enum MorningDigest {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(60))
             await sendIfDue(model)
+            await Forecasts.sendIfDue(model)
         }
     }
 
@@ -308,17 +309,80 @@ enum MorningDigest {
     static func build(_ model: AppModel) async -> MorningSummary {
         let now = Date()
         let events = (try? await model.backend.events(limit: 2000, serverID: nil)) ?? []
-        var soon: [(server: String, item: SoonItem)] = []
-        var care: [(server: String, note: CareNote)] = []
-        for s in model.statuses {
-            for i in model.soon.items(for: s.id, model: model) { soon.append((s.server.name, i)) }
-            for n in Care.notes(s.snapshot, now: now) { care.append((s.server.name, n)) }
-        }
-        soon.sort { $0.item.date < $1.item.date }
+        await model.soon.update(model)
+        let (soon, care) = Forecasts.gather(model, now: now)
         let sites = model.sites
         return MorningSummary.build(servers: model.statuses.map { (name: $0.server.name, ok: $0.alerts.isEmpty && $0.snapshot != nil) },
                                     sites: (ok: sites.filter { $0.alerts.isEmpty }.count, total: sites.count),
                                     events: events, soon: soon, care: care, now: now)
+    }
+}
+
+// MARK: - forecasts
+
+/// What is about to go wrong, as a notification once a day after the
+/// morning hour, and at once for what is two days away or closer. Counted in
+/// the background, so it comes with every window closed.
+@MainActor
+enum Forecasts {
+    static let enabledKey = "forecast.enabled"
+    static let sentKey = "forecast.lastSent"
+    static let urgentKey = "forecast.urgentSent"
+
+    static func gather(_ model: AppModel, now: Date) -> (soon: [(server: String, item: SoonItem)], care: [(server: String, note: CareNote)]) {
+        var soon: [(server: String, item: SoonItem)] = []
+        var care: [(server: String, note: CareNote)] = []
+        let names = Dictionary(model.statuses.map { ($0.id, $0.server.name) }, uniquingKeysWith: { a, _ in a })
+        for s in model.statuses {
+            for i in Soon.items(sites: [], diskDays: model.soon.diskDays[s.id],
+                                payment: s.server.cost?.nextPayment(after: now), now: now) {
+                soon.append((s.server.name, i))
+            }
+            for n in Care.notes(s.snapshot, now: now) { care.append((s.server.name, n)) }
+        }
+        // Every site, also those hosted elsewhere (the map shows only ours).
+        for site in model.sites {
+            let host = model.siteHosts.server[site.id].flatMap { names[$0] } ?? "другой хостинг"
+            for i in Soon.items(sites: [(name: site.name, tls: site.tlsExpiry, domain: site.domainExpiry)],
+                                diskDays: nil, now: now) {
+                soon.append((host, i))
+            }
+        }
+        soon.sort { $0.item.date < $1.item.date }
+        return (soon, care)
+    }
+
+    static func sendIfDue(_ model: AppModel) async {
+        let d = UserDefaults.standard
+        guard d.object(forKey: enabledKey) as? Bool ?? true,
+              !model.statuses.isEmpty, model.lastRound != nil, model.health.problem == nil else { return }
+        await model.soon.update(model)
+        // Which server each site is on, for the names; at most every 10 min.
+        model.siteHosts.refresh(sites: model.siteConfigs, servers: model.statuses.map(\.server))
+        let now = Date()
+        let (soon, care) = gather(model, now: now)
+        let items = Forecast.items(soon: soon, care: care, now: now)
+        let hour = d.object(forKey: MorningDigest.hourKey) as? Int ?? 9
+        var record = (d.dictionary(forKey: urgentKey) as? [String: Double] ?? [:]).mapValues { Date(timeIntervalSince1970: $0) }
+
+        if MorningSummary.due(now: now, hour: hour, lastSent: d.object(forKey: sentKey) as? Date) {
+            d.set(now, forKey: sentKey)
+            if let n = Forecast.notice(items) { post(model, n, key: "forecast") }
+            // Urgent ones are in it: not sent again today.
+            record = Forecast.dueNow(items, sent: record, now: now).sent
+        } else {
+            let (due, updated) = Forecast.dueNow(items, sent: record, now: now)
+            record = updated
+            for i in due {
+                post(model, MorningSummary(title: "Прогноз: срочно", body: i.line), key: "forecast|" + i.id)
+            }
+        }
+        d.set(record.mapValues(\.timeIntervalSince1970), forKey: urgentKey)
+    }
+
+    private static func post(_ model: AppModel, _ n: MorningSummary, key: String) {
+        model.notifyDirect?([AlertEvent(serverID: "forecast", serverName: n.title, key: key, kind: .info,
+                                        severity: .warning, message: n.body, time: Date())])
     }
 }
 

@@ -12,6 +12,7 @@ enum Background {
     static let launchSetKey = "launchAtLogin.set"
     private static var activity: NSObjectProtocol?
     private static var wakeObserver: NSObjectProtocol?
+    private static var sleepObserver: NSObjectProtocol?
 
     static func start(_ model: AppModel) {
         guard Bundle.main.bundleIdentifier != nil, wakeObserver == nil else { return }
@@ -26,6 +27,10 @@ enum Background {
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
                 await model.pollNow()
             }
+        }
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in model.heartbeat.goingToSleep() }
         }
         Task { @MainActor in
             while true {
