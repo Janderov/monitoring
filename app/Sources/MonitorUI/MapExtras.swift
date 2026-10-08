@@ -762,6 +762,7 @@ struct HistoryBar: View {
 
 /// Ticks under the history slider: where problems began and servers
 /// rebooted. A tick jumps the map to that moment.
+@MainActor
 struct HistoryMarks: View {
     var marks: [HistoryMark]
     var start: Date

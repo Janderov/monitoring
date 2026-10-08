@@ -399,7 +399,10 @@ struct MapScreen: View {
 
     @ViewBuilder
     private func inspector(_ d: Scene) -> some View {
-        let pins = d.pins, clientPins = d.clientPins, extPins = d.extPins, clusters = d.clusters
+        let pins = d.pins
+        let clientPins = d.clientPins
+        let extPins = d.extPins
+        let clusters = d.clusters
         if let chain = d.chosen {
             Divider()
             PathInspector(model: model, probes: probes, external: external, chain: chain)
