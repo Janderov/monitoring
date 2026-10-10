@@ -239,7 +239,10 @@ final class PostgresTests: XCTestCase {
         let siteIncident = try await db.scalar("SELECT object_type FROM ops.incident WHERE object_id = \(inv.siteIDs["shop"]!)", as: String.self)
         XCTAssertEqual(siteIncident, "site")
 
+        try await db.query("INSERT INTO sys.job_run (job, started_at) VALUES ('old', \(now.addingTimeInterval(-8 * 86_400)))")
         try await store.rollup(since: now.addingTimeInterval(-7200), now: now)
+        let oldRuns = try await db.scalar("SELECT count(*) FROM sys.job_run WHERE job = 'old'", as: Int64.self)
+        XCTAssertEqual(oldRuns, 0)
         let hourly = try await db.scalar("SELECT sum(samples)::int8 FROM mon.server_hourly WHERE hour >= \(now.addingTimeInterval(-10800))", as: Int64.self)
         XCTAssertEqual(hourly, 32)
         let siteHourly = try await db.scalar("SELECT sum(total)::int8 FROM mon.site_hourly", as: Int64.self)
