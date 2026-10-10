@@ -8,6 +8,9 @@ import PostgresNIO
 /// SQLite history, encrypted with a password). Running it again updates the
 /// servers and sites and adds only what is missing: safe to repeat.
 ///
+/// Clients come from the file's clients.json (see ClientImport); files made
+/// before clients existed put everything under «Своё».
+///
 /// SSH passwords in the file are NOT imported: root access stays on the Mac.
 public enum TransferImport {
     public struct Report: Sendable, CustomStringConvertible {
@@ -32,7 +35,15 @@ public enum TransferImport {
         report.skipped = problems
 
         try await Partitions.ensure(db, now: now, back: 731 * 86_400)
-        let client = try await internalClient(db)
+        let internalID = try await internalClient(db)
+        // Files from before clients existed have no book: everything is «Своё».
+        var book: ClientBook?
+        if let data = contents.clients {
+            do { book = try ClientsRepository.decode(data) } catch {
+                report.skipped.append("клиенты: файл клиентов не читается, всё отнесено к «Своё»")
+            }
+        }
+        let client: UUID? = book == nil ? internalID : nil
 
         // Servers: old text id → uuid, kept in sys.legacy_id.
         var serverIDs: [String: UUID] = [:]
@@ -70,6 +81,11 @@ public enum TransferImport {
         let sqlite = try Store(path: tmp.path)
         try await importHistory(db, from: sqlite, servers: serverIDs, sites: siteIDs, probes: probes,
                                 source: source, now: now, report: &report)
+        if let book {
+            let ids = try await ClientImport.clients(db, book, internalID: internalID)
+            try await ClientImport.assets(db, book, clients: ids, internalID: internalID, servers: serverIDs,
+                                          sites: siteIDs, now: now, report: &report)
+        }
         return report
     }
 
@@ -110,7 +126,7 @@ public enum TransferImport {
     }
 
     static func upsertServer(_ db: Database, box: SecretBox, _ s: ServerConfig, token: String, fingerprint: [UInt8],
-                             client: UUID) async throws -> UUID {
+                             client: UUID?) async throws -> UUID {
         let tags = ([s.group].compactMap { $0 } + (s.tags ?? [])).filter { !$0.isEmpty }
         let th = try snakeJSON(s.thresholds)
         let ssh = sshTarget(s.ssh)
@@ -151,16 +167,18 @@ public enum TransferImport {
                 """, logger: db.logger)
             try await conn.query("INSERT INTO sys.legacy_id (kind, legacy_id, id) VALUES ('server', \(s.id), \(id))",
                                  logger: db.logger)
-            try await conn.query("""
-                INSERT INTO inv.client_asset (client_id, asset_type, asset_id) VALUES (\(client), 'server', \(id))
-                ON CONFLICT DO NOTHING
-                """, logger: db.logger)
+            if let client {
+                try await conn.query("""
+                    INSERT INTO inv.client_asset (client_id, asset_type, asset_id) VALUES (\(client), 'server', \(id))
+                    ON CONFLICT DO NOTHING
+                    """, logger: db.logger)
+            }
         }
         return id
     }
 
     static func upsertSite(_ db: Database, box: SecretBox, _ site: SiteConfig, password: String?,
-                           client: UUID) async throws -> UUID {
+                           client: UUID?) async throws -> UUID {
         let tags = ([site.group].compactMap { $0 } + (site.tags ?? [])).filter { !$0.isEmpty }
         let th = try snakeJSON(site.thresholds)
         let existing = try await legacy(db, "site", site.id)
@@ -194,10 +212,12 @@ public enum TransferImport {
                     """, logger: db.logger)
                 try await conn.query("INSERT INTO sys.legacy_id (kind, legacy_id, id) VALUES ('site', \(site.id), \(id))",
                                      logger: db.logger)
-                try await conn.query("""
-                    INSERT INTO inv.client_asset (client_id, asset_type, asset_id) VALUES (\(client), 'site', \(id))
-                    ON CONFLICT DO NOTHING
-                    """, logger: db.logger)
+                if let client {
+                    try await conn.query("""
+                        INSERT INTO inv.client_asset (client_id, asset_type, asset_id) VALUES (\(client), 'site', \(id))
+                        ON CONFLICT DO NOTHING
+                        """, logger: db.logger)
+                }
             }
         }
         return id

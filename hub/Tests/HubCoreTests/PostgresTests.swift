@@ -101,10 +101,24 @@ final class PostgresTests: XCTestCase {
         try await mac.copy(to: tmp.appendingPathExtension("copy"))
         let database = try Data(contentsOf: tmp.appendingPathExtension("copy"))
         try? FileManager.default.removeItem(at: tmp.appendingPathExtension("copy"))
+        // Clients: the site belongs to a customer, the server to nobody (= «Своё»).
+        var book = ClientBook()
+        book.ensureInternal(now: now)
+        let shopOwner = Client(name: "ООО Ромашка", kind: .company,
+                               contacts: [ClientContact(name: "Ирина", role: .owner, email: "Irina@example.com",
+                                                        receivesReport: true)],
+                               contracts: [ClientContract(planName: "Базовый", monthlyPrice: 3500, currency: "₽",
+                                                          billingDay: 10, startedOn: now.addingTimeInterval(-40 * 86_400),
+                                                          slaUptime: 99.5, reportDay: 3)],
+                               createdAt: now.addingTimeInterval(-40 * 86_400))
+        book.clients.append(shopOwner)
+        book.assets = [ClientAsset(clientID: shopOwner.id, type: .site, assetID: "shop", since: now.addingTimeInterval(-40 * 86_400)),
+                       ClientAsset(clientID: shopOwner.id, type: .vpnKey, assetID: "unknown-key", since: now)]
         let file = try Transfer.seal(
             Transfer.Contents(created: now, servers: try servers.encoded(),
                               secrets: [SecretKey.agentToken("nl"): token, SecretKey.siteAuth("shop"): "pw",
-                                        SecretKey.sshPassword("nl"): "root-password"]),
+                                        SecretKey.sshPassword("nl"): "root-password"],
+                              clients: try ClientsRepository.encode(book)),
             database: database, password: "password1", iterations: 1000)
         let box = try SecretBox(key: config.secretKey!)
 
@@ -123,6 +137,35 @@ final class PostgresTests: XCTestCase {
         // The SSH password stays on the Mac.
         let secrets = try await db.scalar("SELECT count(*) FROM sys.secret", as: Int64.self)
         XCTAssertEqual(secrets, 2)
+        // Clients from the book, owners replaced on every import, no doubles.
+        XCTAssertEqual(second.rows["clients"], 2)
+        XCTAssertTrue(second.skipped.contains { $0.contains("ключей VPN") })
+        let clientCount = try await db.scalar("SELECT count(*) FROM inv.client", as: Int64.self)
+        XCTAssertEqual(clientCount, 2)
+        let siteOwner = try await db.scalar("""
+            SELECT c.name FROM inv.client_asset a JOIN inv.client c ON c.id = a.client_id WHERE a.asset_type = 'site'
+            """, as: String.self)
+        XCTAssertEqual(siteOwner, "ООО Ромашка")
+        let serverOwner = try await db.scalar("""
+            SELECT c.name FROM inv.client_asset a JOIN inv.client c ON c.id = a.client_id WHERE a.asset_type = 'server'
+            """, as: String.self)
+        XCTAssertEqual(serverOwner, "Своё")
+        let assetRows = try await db.scalar("SELECT count(*) FROM inv.client_asset", as: Int64.self)
+        XCTAssertEqual(assetRows, 2)
+        let contact = try await db.scalar("""
+            SELECT email::text || '/' || role || '/' || receives_report FROM inv.client_contact
+            """, as: String.self)
+        XCTAssertEqual(contact, "Irina@example.com/owner/true")
+        let contract = try await db.scalar("""
+            SELECT plan_name || '/' || monthly_price || '/' || currency || '/' || billing_day || '/' || sla_uptime
+            FROM inv.client_contract
+            """, as: String.self)
+        XCTAssertEqual(contract, "Базовый/3500.00/RUB/10/99.500")
+        let reportDay = try await db.scalar("SELECT day_of_month::int8 FROM rep.client_report_settings", as: Int64.self)
+        XCTAssertEqual(reportDay, 3)
+        let shopClientID = try await db.scalar("SELECT id FROM inv.client WHERE NOT is_internal", as: UUID.self)
+        XCTAssertEqual(shopClientID?.uuidString.lowercased(), shopOwner.id)
+
         let cost = try await db.scalar("SELECT currency::text FROM inv.server", as: String.self)
         XCTAssertEqual(cost, "RUB")
 
