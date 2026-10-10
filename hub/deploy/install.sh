@@ -21,6 +21,18 @@ if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; t
   systemctl enable --now docker
 fi
 command -v git >/dev/null || apt-get install -y -qq git >/dev/null
+# Docker Hub throttles and sometimes blocks Russian addresses: pull through
+# Google's mirror of it, unless Docker is already configured by hand.
+if [ ! -s /etc/docker/daemon.json ]; then
+  mkdir -p /etc/docker
+  echo '{"registry-mirrors":["https://mirror.gcr.io"]}' > /etc/docker/daemon.json
+  systemctl restart docker
+fi
+# Building the hub needs about 3 GB of memory: add swap on smaller servers.
+if [ "$(free -m | awk '/Mem:/{print $2}')" -lt 3500 ] && ! swapon --show | grep -q .; then
+  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap -q /swapfile && swapon /swapfile \
+    && echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
 
 say "2/5 Забираю код хаба"
 if [ -d "$DIR/src/.git" ]; then
