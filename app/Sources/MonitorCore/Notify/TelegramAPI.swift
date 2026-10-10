@@ -64,11 +64,15 @@ public struct TelegramUser: Decodable, Equatable, Sendable {
     public var id: Int64
     public var username: String?
     public var first_name: String?
+    public init(id: Int64, username: String? = nil, first_name: String? = nil) {
+        self.id = id; self.username = username; self.first_name = first_name
+    }
 }
 
 public struct TelegramChat: Decodable, Equatable, Sendable {
     public var id: Int64
     public var type: String
+    public init(id: Int64, type: String) { self.id = id; self.type = type }
 }
 
 public struct TelegramIncoming: Decodable, Equatable, Sendable {
@@ -76,6 +80,9 @@ public struct TelegramIncoming: Decodable, Equatable, Sendable {
     public var chat: TelegramChat
     public var from: TelegramUser?
     public var text: String?
+    public init(message_id: Int64, chat: TelegramChat, from: TelegramUser? = nil, text: String? = nil) {
+        self.message_id = message_id; self.chat = chat; self.from = from; self.text = text
+    }
 }
 
 public struct TelegramCallback: Decodable, Equatable, Sendable {
@@ -83,12 +90,18 @@ public struct TelegramCallback: Decodable, Equatable, Sendable {
     public var from: TelegramUser
     public var message: TelegramIncoming?
     public var data: String?
+    public init(id: String, from: TelegramUser, message: TelegramIncoming? = nil, data: String? = nil) {
+        self.id = id; self.from = from; self.message = message; self.data = data
+    }
 }
 
 public struct TelegramUpdate: Decodable, Equatable, Sendable {
     public var update_id: Int64
     public var message: TelegramIncoming?
     public var callback_query: TelegramCallback?
+    public init(update_id: Int64, message: TelegramIncoming? = nil, callback_query: TelegramCallback? = nil) {
+        self.update_id = update_id; self.message = message; self.callback_query = callback_query
+    }
 }
 
 // MARK: Calls
@@ -159,6 +172,13 @@ public struct TelegramBotAPI: Sendable {
         } catch TelegramError.rejected(400, let text) where text.contains("not modified") {
             return
         }
+    }
+
+    /// The bot's username, for the t.me link the cabinet shows.
+    public func me() async throws -> String {
+        struct Me: Decodable { var username: String? }
+        let m: Me = try await call("getMe", [:])
+        return m.username ?? ""
     }
 
     /// The small note over the chat after a button press.

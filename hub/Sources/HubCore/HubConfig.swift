@@ -20,15 +20,20 @@ public struct HubConfig: Sendable {
     public var heartbeatURL: URL?
     /// The hub's own name as a check point (inv.probe).
     public var probeName: String
+    /// The Telegram bot's token from @BotFather; nil = no Telegram.
+    public var telegramToken: String?
 
-    public static let credentialNames = (key: "secret-key", heartbeat: "heartbeat-url", dbPassword: "db-password")
+    public static let credentialNames = (key: "secret-key", heartbeat: "heartbeat-url", dbPassword: "db-password",
+                                         telegram: "telegram-bot-token")
 
     public init(dbHost: String = "127.0.0.1", dbPort: Int = 5432, dbUser: String = "monitor",
                 dbName: String = "monitor", dbPassword: String? = nil, dbTLS: Bool = false,
-                migrationsDir: URL, secretKey: Data? = nil, heartbeatURL: URL? = nil, probeName: String = "Хаб") {
+                migrationsDir: URL, secretKey: Data? = nil, heartbeatURL: URL? = nil, probeName: String = "Хаб",
+                telegramToken: String? = nil) {
         self.dbHost = dbHost; self.dbPort = dbPort; self.dbUser = dbUser; self.dbName = dbName
         self.dbPassword = dbPassword; self.dbTLS = dbTLS; self.migrationsDir = migrationsDir
         self.secretKey = secretKey; self.heartbeatURL = heartbeatURL; self.probeName = probeName
+        self.telegramToken = telegramToken
     }
 
     public struct Error: Swift.Error, CustomStringConvertible {
@@ -58,6 +63,14 @@ public struct HubConfig: Sendable {
             }
             heartbeat = url
         }
+        var telegram: String?
+        if let text = credential(credentialNames.telegram) {
+            // "123456789:AA…" from @BotFather.
+            guard text.range(of: #"^[0-9]{5,}:[A-Za-z0-9_-]{30,}$"#, options: .regularExpression) != nil else {
+                throw Error("токен бота \(credentialNames.telegram) не похож на токен от @BotFather")
+            }
+            telegram = text
+        }
         return HubConfig(
             dbHost: env["PGHOST"] ?? "127.0.0.1",
             dbPort: Int(env["PGPORT"] ?? "") ?? 5432,
@@ -68,7 +81,8 @@ public struct HubConfig: Sendable {
             migrationsDir: URL(fileURLWithPath: env["HUB_MIGRATIONS"] ?? "/opt/monitor-hub/migrations"),
             secretKey: key,
             heartbeatURL: heartbeat,
-            probeName: env["HUB_NAME"] ?? "Хаб")
+            probeName: env["HUB_NAME"] ?? "Хаб",
+            telegramToken: telegram)
     }
 
     static func credentialsFolder(_ env: [String: String]) -> URL? {
