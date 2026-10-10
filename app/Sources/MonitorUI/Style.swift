@@ -176,6 +176,9 @@ enum Fmt {
         date.formatted(date: Calendar.current.isDateInToday(date) ? .omitted : .abbreviated, time: .shortened)
     }
 
+    /// "1 сент. 2026 г.".
+    static func day(_ date: Date) -> String { date.formatted(date: .abbreviated, time: .omitted) }
+
     static func days(until date: Date) -> Int {
         Int((date.timeIntervalSinceNow / 86400).rounded(.down))
     }

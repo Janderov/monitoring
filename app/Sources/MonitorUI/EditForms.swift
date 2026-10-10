@@ -27,6 +27,11 @@ struct EditSheetView: View {
         case .editSite(let id):
             if let s = model.siteConfigs.first(where: { $0.id == id }) { SiteForm(model: model, original: s) }
             else { Missing(title: "Сайт уже удалён") }
+        case .addClient:
+            ClientForm(model: model, original: nil)
+        case .editClient(let id):
+            if let c = model.client(id) { ClientForm(model: model, original: c) }
+            else { Missing(title: "Клиента уже нет") }
         case .restartContainer(let id, let container):
             if let s = model.status(id) { RestartSheet(model: model, server: s.server, container: container) }
             else { Missing(title: "Сервер уже удалён") }
@@ -51,7 +56,7 @@ private struct Missing: View {
 
 /// Bottom row of every form: destructive action on the left, cancel and the
 /// main action on the right, as in System Settings sheets.
-private struct FormButtons<Leading: View>: View {
+struct FormButtons<Leading: View>: View {
     var primary: String
     var enabled: Bool
     var busy: Bool

@@ -6,6 +6,10 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "Monitor", targets: ["Monitor"]),
+        // The core alone, for the hub (hub/) that runs the same rounds on a server.
+        .library(name: "MonitorCore", targets: ["MonitorCore"]),
+        // Client reports, for the hub's monthly job and the /r/<token> page.
+        .library(name: "MonitorReports", targets: ["MonitorReports"]),
     ],
     dependencies: [
         // CryptoKit's API on Linux, so the core (sealed passwords) tests in CI.
@@ -24,8 +28,12 @@ let package = Package(
         ]),
         // The menu bar app (macOS only; the sources are empty elsewhere).
         // SwiftUI views and the observable app model (macOS only; empty on Linux).
-        .target(name: "MonitorUI", dependencies: ["MonitorCore"]),
+        .target(name: "MonitorUI", dependencies: ["MonitorCore", "MonitorReports"]),
+        // Monthly client reports: builds the snapshot from the hub's database
+        // rows, renders the page and PDF source, link tokens. No UI, no driver.
+        .target(name: "MonitorReports", dependencies: ["MonitorCore"]),
         .executableTarget(name: "Monitor", dependencies: ["MonitorCore", "MonitorUI"]),
         .testTarget(name: "MonitorCoreTests", dependencies: ["MonitorCore"]),
+        .testTarget(name: "MonitorReportsTests", dependencies: ["MonitorReports"]),
     ]
 )
