@@ -100,9 +100,9 @@ CREATE TABLE sys.import_batch (
   status      text NOT NULL DEFAULT 'running' CHECK (status IN ('running','done','failed')),
   error       text
 );
--- Старые текстовые id из servers.json → новые uuid.
+-- Старые текстовые id из servers.json и clients.json → новые uuid.
 CREATE TABLE sys.legacy_id (
-  kind      text NOT NULL CHECK (kind IN ('server','site')),
+  kind      text NOT NULL CHECK (kind IN ('server','site','vpn_key')),  -- для vpn_key legacy_id = публичный ключ
   legacy_id text NOT NULL,
   id        uuid NOT NULL,
   PRIMARY KEY (kind, legacy_id)
@@ -314,7 +314,8 @@ CREATE TABLE inv.client_contact (
   role             text NOT NULL DEFAULT 'other' CHECK (role IN ('owner','tech','billing','other')),
   email            citext,
   phone            text,
-  telegram_chat_id bigint,
+  telegram         text,                 -- как ввели в приложении: @username или ссылка
+  telegram_chat_id bigint,              -- появляется после привязки через бота
   receives_report  boolean NOT NULL DEFAULT true,
   receives_alerts  boolean NOT NULL DEFAULT false,  -- задел: решение Михаила 2026-10-10 — тревоги клиентам пока не шлём
   sort             int NOT NULL DEFAULT 0
