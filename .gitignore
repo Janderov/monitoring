@@ -5,3 +5,4 @@ agent/dist/
 hub/.testmig/
 hub/.build/
 app/.build/
+app/Package.resolved
