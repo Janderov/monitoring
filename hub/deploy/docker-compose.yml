@@ -1,6 +1,9 @@
-# The hub and its database on one small VPS. Nothing here listens on the
-# internet: the hub only connects out (to the agents and to healthchecks.io),
-# and PostgreSQL is reachable only by the hub inside this compose network.
+# The hub and its database on one small VPS. PostgreSQL is reachable only by
+# the hub inside this compose network. The only thing open to the internet is
+# Caddy (ports 80/443, HTTPS certificate from Let's Encrypt) in front of the
+# web cabinet, and only when a domain is set in ./.env (install.sh asks):
+#   HUB_DOMAIN=hub.example.com
+#   COMPOSE_PROFILES=web
 #
 # Secrets are files in ./secrets (install.sh makes them, mode 600):
 #   secret-key     encryption key for agent tokens in the database
@@ -40,10 +43,28 @@ services:
       PGUSER: monitor
       PGDATABASE: monitor
       HUB_NAME: ${HUB_NAME:-Хаб}
+      # The web cabinet listens inside the compose network only; Caddy is its door.
+      HUB_HTTP: ${HUB_HTTP:-0.0.0.0:8080}
+      HUB_PUBLIC_URL: ${HUB_DOMAIN:+https://${HUB_DOMAIN}}
+      HUB_TRUST_PROXY: "1"
       TZ: Europe/Moscow
     secrets: [secret-key, db-password, heartbeat-url]
     volumes:
       - ./import:/import:ro
+
+  # HTTPS for the web cabinet. Gets and renews the certificate by itself.
+  caddy:
+    image: caddy:2
+    profiles: [web]
+    restart: unless-stopped
+    depends_on: [hub]
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      HUB_DOMAIN: ${HUB_DOMAIN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
 
   # A copy of the database every night, 14 days kept, in ./backups.
   backup:
@@ -81,3 +102,5 @@ secrets:
 
 volumes:
   pgdata:
+  caddy-data:
+  caddy-config:

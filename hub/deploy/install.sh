@@ -45,12 +45,25 @@ if [ ! -e "$SECRETS/heartbeat-url" ]; then
   fi
   printf '%s\n' "$url" > "$SECRETS/heartbeat-url"
 fi
+# The web cabinet's address. Its DNS A record must point at this VPS.
+if [ ! -e "$DIR/hub.env" ]; then
+  domain=""
+  if [ -t 0 ] || [ -e /dev/tty ]; then
+    read -r -p "Адрес кабинета в браузере (например hub.example.com), Enter — без кабинета: " domain </dev/tty || true
+  fi
+  if [ -n "$domain" ]; then
+    printf 'HUB_DOMAIN=%s\nCOMPOSE_PROFILES=web\n' "$domain" > "$DIR/hub.env"
+  else
+    : > "$DIR/hub.env"
+  fi
+fi
 chown -R 10001 "$SECRETS" "$DIR/import"
 chmod 600 "$SECRETS"/*
 # The compose file looks for ./secrets, ./backups and ./import next to it.
 ln -sfn "$SECRETS" "$COMPOSE_DIR/secrets"
 ln -sfn "$DIR/backups" "$COMPOSE_DIR/backups"
 ln -sfn "$DIR/import" "$COMPOSE_DIR/import"
+ln -sfn "$DIR/hub.env" "$COMPOSE_DIR/.env"
 
 say "4/5 Собираю и запускаю (первый раз несколько минут)"
 cd "$COMPOSE_DIR"
@@ -67,9 +80,13 @@ cat <<MSG
 Готово. Хаб $VERSION работает и будет перезапускаться сам после сбоев и перезагрузки VPS.
 
 Что дальше:
+  • Первый вход в веб-кабинет (ссылка на 48 часов):
+                                         cd $COMPOSE_DIR && docker compose exec hub monitor-hub owner-invite
   • Перенести серверы и историю с Mac:  $DIR/src/hub/deploy/import.sh ФАЙЛ.monitortransfer
   • Посмотреть, что делает хаб:          cd $COMPOSE_DIR && docker compose logs -f hub
   • Обновить хаб:                        запустите этот же скрипт ещё раз
+
+Кабинет: $(grep -q HUB_DOMAIN "$DIR/hub.env" && sed -n 's/^HUB_DOMAIN=/https:\/\//p' "$DIR/hub.env" || echo "не включён (впишите HUB_DOMAIN и COMPOSE_PROFILES=web в $DIR/hub.env и запустите скрипт ещё раз)")
 
 Сохраните копию $SECRETS/secret-key в надёжном месте: без него токены
 агентов в базе не расшифровать (их можно заново перенести с Mac).
