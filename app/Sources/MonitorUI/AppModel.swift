@@ -363,7 +363,7 @@ public enum EditSheet: Identifiable, Hashable, Sendable {
 }
 
 public enum AppSection: Hashable, Sendable {
-    case overview, map, problems, clients, servers, sites, vpn, journal, settings
+    case overview, map, problems, clients, reports, servers, sites, vpn, journal, settings
 }
 
 public enum Filter: Hashable, Sendable {

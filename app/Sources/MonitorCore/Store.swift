@@ -432,6 +432,11 @@ public actor Store {
         public var statusCode: Int?
         public var latencyMs: Double
         public var error: String?
+
+        public init(serverID: String, time: Date, ok: Bool, statusCode: Int? = nil, latencyMs: Double, error: String? = nil) {
+            self.serverID = serverID; self.time = time; self.ok = ok; self.statusCode = statusCode
+            self.latencyMs = latencyMs; self.error = error
+        }
     }
 
     /// One site's check results from every server, oldest first.
@@ -486,6 +491,13 @@ public actor Store {
         public var hour: Date
         public var cpuAvg, cpuMax, memAvg, memMax, diskMax, rxAvg, txAvg: Double
         public var vpnMax, samples, pollsOK, pollsTotal: Int
+
+        public init(hour: Date, cpuAvg: Double = 0, cpuMax: Double, memAvg: Double = 0, memMax: Double, diskMax: Double,
+                    rxAvg: Double = 0, txAvg: Double = 0, vpnMax: Int = 0, samples: Int = 0, pollsOK: Int, pollsTotal: Int) {
+            self.hour = hour; self.cpuAvg = cpuAvg; self.cpuMax = cpuMax; self.memAvg = memAvg; self.memMax = memMax
+            self.diskMax = diskMax; self.rxAvg = rxAvg; self.txAvg = txAvg; self.vpnMax = vpnMax; self.samples = samples
+            self.pollsOK = pollsOK; self.pollsTotal = pollsTotal
+        }
     }
 
     public func hourly(_ serverID: String, from: Date, to: Date) throws -> [Hourly] {
@@ -511,6 +523,12 @@ public actor Store {
         public var severity: Severity
         public var message: String
         public var actor: String
+
+        public init(serverID: String, time: Date, key: String, kind: AlertEvent.Kind, severity: Severity,
+                    message: String, actor: String = "system") {
+            self.serverID = serverID; self.time = time; self.key = key; self.kind = kind; self.severity = severity
+            self.message = message; self.actor = actor
+        }
     }
 
     public func addAction(_ a: AuditRecord) throws {
