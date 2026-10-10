@@ -1,0 +1,44 @@
+name: hub
+
+on:
+  push:
+    branches: [main]
+    paths: ["hub/**", "app/Sources/MonitorCore/**", "app/Package.swift", "db/**", ".github/workflows/hub.yml"]
+  pull_request:
+    paths: ["hub/**", "app/Sources/MonitorCore/**", "app/Package.swift", "db/**", ".github/workflows/hub.yml"]
+
+concurrency:
+  group: hub-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The hub on a real PostgreSQL 18: migrations, import from the Mac, storing
+  # polls, incidents, rollups and partitions.
+  tests:
+    runs-on: ubuntu-latest
+    container: swift:6.0-noble
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: monitor
+          POSTGRES_DB: monitor
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd "pg_isready -U monitor" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      HUB_TEST_PG: "1"
+      PGHOST: postgres
+      PGUSER: monitor
+      PGDATABASE: monitor
+      HUB_CREDENTIALS: /nonexistent
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update -qq && apt-get install -y -qq libsqlite3-dev
+      - run: HUB_MIGRATIONS="$GITHUB_WORKSPACE/db/migrations" swift test

@@ -158,6 +158,10 @@ public actor DomainExpiry {
         public var expiry: Date?
         public var error: String?
         public var checkedAt: Date
+
+        public init(expiry: Date? = nil, error: String? = nil, checkedAt: Date) {
+            self.expiry = expiry; self.error = error; self.checkedAt = checkedAt
+        }
     }
 
     private let transport: DomainLookupTransport

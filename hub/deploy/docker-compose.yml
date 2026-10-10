@@ -1,0 +1,83 @@
+# The hub and its database on one small VPS. Nothing here listens on the
+# internet: the hub only connects out (to the agents and to healthchecks.io),
+# and PostgreSQL is reachable only by the hub inside this compose network.
+#
+# Secrets are files in ./secrets (install.sh makes them, mode 600):
+#   secret-key     encryption key for agent tokens in the database
+#   db-password    PostgreSQL password
+#   heartbeat-url  healthchecks.io ping address (empty file = no pulse)
+name: monitor-hub
+
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: monitor
+      POSTGRES_DB: monitor
+      POSTGRES_PASSWORD_FILE: /run/secrets/db-password
+    secrets: [db-password]
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "monitor", "-d", "monitor"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    shm_size: 256mb
+
+  hub:
+    image: monitor-hub:latest
+    build:
+      context: ../..
+      dockerfile: hub/deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: monitor
+      PGDATABASE: monitor
+      HUB_NAME: ${HUB_NAME:-Хаб}
+      TZ: Europe/Moscow
+    secrets: [secret-key, db-password, heartbeat-url]
+    volumes:
+      - ./import:/import:ro
+
+  # A copy of the database every night, 14 days kept, in ./backups.
+  backup:
+    image: postgres:18
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: monitor
+      PGDATABASE: monitor
+      PGPASSFILE: /tmp/.pgpass
+    secrets: [db-password]
+    volumes:
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        printf 'db:5432:monitor:monitor:%s\n' "$$(cat /run/secrets/db-password)" > /tmp/.pgpass && chmod 600 /tmp/.pgpass
+        while true; do
+          f=/backups/monitor-$$(date +%F).dump
+          pg_dump -Fc -f "$$f.tmp" && mv "$$f.tmp" "$$f" && echo "backup $$f"
+          find /backups -name 'monitor-*.dump' -mtime +14 -delete
+          sleep 86400
+        done
+
+secrets:
+  secret-key:
+    file: ./secrets/secret-key
+  db-password:
+    file: ./secrets/db-password
+  heartbeat-url:
+    file: ./secrets/heartbeat-url
+
+volumes:
+  pgdata:
