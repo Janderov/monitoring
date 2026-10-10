@@ -2,3 +2,6 @@ agent/monitor-agent
 *.test
 .DS_Store
 agent/dist/
+hub/.testmig/
+hub/.build/
+app/.build/

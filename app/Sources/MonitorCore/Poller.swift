@@ -66,12 +66,16 @@ public actor Poller {
     public static let firstBackfill: TimeInterval = 24 * 3600
 
     private let client: AgentClient
-    private let store: Store
+    private let store: any PollStore
     private var servers: [ServerConfig] = []
     private var engine = AlertEngine()
     private var statuses: [String: ServerStatus] = [:]
     private var task: Task<Void, Never>?
     private var refresh: TimeInterval = Poller.interval
+    /// Whether agents are told to sample at `refresh`. Off for a second
+    /// poller (the hub running beside the Mac), so the two do not keep
+    /// switching the agents between their intervals.
+    private var setsAgentInterval = true
     /// Servers asked to reboot from the app, with when.
     private var rebooting: [String: Date] = [:]
     /// When each unreachable server first stopped answering.
@@ -103,7 +107,7 @@ public actor Poller {
     private let onUpdate: @Sendable ([ServerStatus]) -> Void
     private let onEvents: @Sendable ([AlertEvent]) -> Void
 
-    public init(client: AgentClient, store: Store,
+    public init(client: AgentClient, store: any PollStore,
                 domainLookup: DomainLookupTransport = NetworkDomainLookup(),
                 onUpdate: @escaping @Sendable ([ServerStatus]) -> Void,
                 onEvents: @escaping @Sendable ([AlertEvent]) -> Void) {
@@ -181,6 +185,8 @@ public actor Poller {
             }
         }
     }
+
+    public func setSetsAgentInterval(_ on: Bool) { setsAgentInterval = on }
 
     /// How often the screens refresh (and agents sample), clamped to the
     /// offered range. A running loop restarts so the change applies at once.
@@ -348,7 +354,7 @@ public actor Poller {
         await restore()
         lastFullRound = now
         let list = servers
-        let wantInterval = Int(refresh)
+        let wantInterval = setsAgentInterval ? Int(refresh) : nil
         let wanted = Dictionary(uniqueKeysWithValues: list.map { s in
             (s.id, Poller.targets(for: s, servers: list, sites: sites,
                                   talksTo: Set((statuses[s.id]?.snapshot?.links ?? []).map(\.remoteIp))))
@@ -409,7 +415,7 @@ public actor Poller {
                 let extra = [Rules.stale(frozenSince: frozenSince[s.id], now: now)].compactMap { $0 }
                 let ev = engine.process(server: s, outcome: outcome, extra: extra, now: now)
                 events += ev
-                for e in ev { try? await store.addEvent(e) }
+                for e in ev { try? await store.addEvent(e, actor: "system") }
             }
 
             var st = statuses[s.id] ?? ServerStatus(server: s, alerts: [])
@@ -458,7 +464,7 @@ public actor Poller {
         }
         let lines = AwaySummary.lines(from: last, seen: seen, sites: sites)
         let event = AwaySummary.event(from: last, to: now, lines: lines)
-        try? await store.addEvent(event)
+        try? await store.addEvent(event, actor: "system")
         return lines.isEmpty ? nil : event
     }
 
@@ -481,7 +487,7 @@ public actor Poller {
             if alerts && !macOffline {
                 let ev = engine.process(id: alertID, name: site.name, conditions: SiteRules.conditions(st, now: now),
                                         reachable: true, now: now)
-                for e in ev { try? await store.addEvent(e) }
+                for e in ev { try? await store.addEvent(e, actor: "system") }
                 events += ev
             }
             st.alerts = engine.active(alertID)
@@ -536,7 +542,7 @@ public actor Poller {
         var samples: [Snapshot] = []
     }
 
-    static func poll(_ s: ServerConfig, client: AgentClient, store: Store, push: [CheckTarget]? = nil,
+    static func poll(_ s: ServerConfig, client: AgentClient, store: any PollStore, push: [CheckTarget]? = nil,
                      interval: Int? = nil, now: Date) async -> PollResult {
         // First everything from the agent, then the database: a database
         // that cannot be written must not make a healthy server look down.
@@ -584,10 +590,10 @@ public actor Poller {
             // A container stuck restarting would flood the log: a few
             // entries an hour per container are enough to see it.
             let recent = (try? await store.eventCount(s.id, key: e.key, since: e.time.addingTimeInterval(-3600))) ?? 0
-            if recent < ServerEvents.maxPerHour { try? await store.addEvent(e) }
+            if recent < ServerEvents.maxPerHour { try? await store.addEvent(e, actor: "system") }
         }
         do { try await store.setLatest(s.id, snap) } catch { storeError = storeError ?? describe(error) }
-        try? await store.addVPNTraffic(s.id, snap)
+        try? await store.addVPNTraffic(s.id, snap, calendar: .current)
         // Older agents report no interval and have no settings to change.
         if let interval, let current = snap.intervalS, current != interval {
             try? await client.setInterval(s, seconds: interval)

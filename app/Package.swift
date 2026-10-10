@@ -6,6 +6,8 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "Monitor", targets: ["Monitor"]),
+        // The core alone, for the hub (hub/) that runs the same rounds on a server.
+        .library(name: "MonitorCore", targets: ["MonitorCore"]),
     ],
     dependencies: [
         // CryptoKit's API on Linux, so the core (sealed passwords) tests in CI.
