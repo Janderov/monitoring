@@ -334,6 +334,29 @@ final class NotifyTests: XCTestCase {
         XCTAssertNil(failed["d2"], "left queued for the next flush")
     }
 
+    func testFlushBundlesOneClient() async throws {
+        let fake = FakeTelegram(), store = MemoryTelegramStore()
+        let t = at(2026, 10, 10, 14, 40)
+        func fired(_ id: String, _ client: String, chat: Int64 = 1) -> TelegramOutgoing {
+            let i = incident(id, client: client, started: t)
+            return TelegramOutgoing(deliveryID: "d-\(id)-\(chat)", chatID: chat, message: TelegramText.alert(.fired, i, now: t),
+                                    bundle: client, incident: i)
+        }
+        await store.queue([fired("a", "alfa"), fired("b", "alfa"), fired("c", "beta", chat: 2), fired("d", "alfa"),
+                           fired("e", "alfa", chat: 3)])
+        await fake.set([200, 200, 200], [#"{"ok":true,"result":{"message_id":10}}"#, #"{"ok":true,"result":{"message_id":11}}"#,
+                                         #"{"ok":true,"result":{"message_id":12}}"#])
+        let bot = TelegramBot(api: TelegramBotAPI(transport: fake), store: store, clock: { t })
+        let n = try await bot.flush()
+        XCTAssertEqual(n, 3, "one list for chat 1, single messages for chats 2 and 3")
+        let first = await fake.body(0)["text"] as? String
+        XCTAssertTrue(first?.hasPrefix("🔴 <b>Клиент alfa: 3 проблемы</b>") == true)
+        let sent = await store.sentIDs
+        XCTAssertEqual(sent["d-a-1"], 10)
+        XCTAssertEqual(sent["d-d-1"], 10, "every row of the list points at the one message")
+        XCTAssertEqual(sent["d-c-2"], 11)
+    }
+
     func testRetrySchedule() {
         let t = Date(timeIntervalSince1970: 0)
         XCTAssertEqual(TelegramBot.retry(attempts: 1, now: t), t.addingTimeInterval(10))

@@ -11,7 +11,7 @@
 - Уведомления Mac остаются вторым каналом, когда приложение запущено.
 
 ## 2. Бот
-- Один бот на всю установку. Михаил создаёт его в @BotFather и вставляет токен в настройках хаба (в кабинете генерального админа, поле «Токен бота»). Токен уходит в секреты хаба, обратно не показывается.
+- Один бот на всю установку. Михаил создаёт его в @BotFather и вставляет токен в кабинете генерального админа (поле «Токен бота», с подтверждением кодом) или на сервере командой `hub/deploy/telegram.sh token`. Хаб проверяет токен у Telegram и хранит его зашифрованным в sys.secret (тем же ключом, что токены агентов) либо в файле `secrets/telegram-bot-token`; обратно токен не показывается. Новый токен хаб подхватывает за минуту.
 - Бот отвечает только привязанным людям. Остальным: «Этот бот закрытый».
 
 ## 3. Привязка Telegram к кабинету
@@ -65,16 +65,17 @@
 1. Эскалация генеральному админу через 15 минут: да.
 2. Оповещения получают только Михаил и сотрудники; клиентам не шлём.
 
-## 11. Код (app/Sources/MonitorCore/Notify)
-Чистая логика без базы, тестируется на Linux в CI (NotifyTests).
-- `Routing.swift`: `Notify.isQuiet`, `Notify.decide`, `Notify.plan` (строки для ntf.delivery с dedup_key), `Notify.bundle` (3+ проблемы клиента за раунд → одно сообщение), `Notify.escalations` (15 мин), `Notify.massOutage`.
-- `TelegramText.swift`: все тексты и кнопки (HTML-разметка Telegram), «Беру», «решено», дайджест, /status, «Подробнее».
-- `TelegramAPI.swift`: Bot API (getUpdates long polling, sendMessage, editMessageText, answerCallbackQuery). Токен только в `URLSessionTelegram`, в ошибки и логи не попадает.
-- `TelegramBot.swift`: одноразовые коды привязки (в базе только SHA-256), разбор команд и кнопок, актор `TelegramBot` и протокол `TelegramStore`.
+## 11. Код
+Логика без базы — `app/Sources/MonitorCore/Notify` (тесты NotifyTests):
+- `Routing.swift`: тихие часы, кому слать (`Notify.decide/plan`), склейка, эскалация, массовый сбой.
+- `TelegramText.swift`: все тексты и кнопки.
+- `TelegramAPI.swift`: Bot API (getUpdates, sendMessage, editMessageText, answerCallbackQuery, getMe). Токен только в `URLSessionTelegram`, в ошибки и журнал не попадает.
+- `TelegramBot.swift`: коды привязки (в базе только SHA-256), команды и кнопки, отправка очереди со склейкой 3+ тревог клиента.
 
-Как хаб подключает:
-1. Реализует `TelegramStore` поверх PostgreSQL (ntf.telegram_link, ntf.link_code, ntf.prefs, ntf.mute, ntf.delivery, ops.incident, ops.incident_ack, sys.kv). Права alerts_receive / alerts_ack проверяются внутри методов.
-2. На событие движка (fired/reminder/resolved) берёт получателей с alerts_receive по клиенту, вызывает `Notify.plan` и пишет строки ntf.delivery в той же транзакции, что и ops.incident. `.holdForMorning` → status `dropped_quiet`, такие проблемы уходят в утренний `TelegramText.digest`.
-3. «Решено» ставит в очередь ответом (`replyTo` = external_id первого сообщения) и правку первого сообщения (`TelegramText.closed`).
-4. Раз в минуту `Notify.escalations` → `Notify.plan(.escalation, …)`.
-5. В цикле: `bot.poll()` (ждёт до 25 с) и `bot.flush()` каждые 2 с.
+Хаб — `hub/Sources/HubCore` (тест TelegramPostgresTests на настоящем PostgreSQL 18):
+- `NotifyQueue.swift`: в той же транзакции, что и ops.incident (PostgresPollStore.addEvent), пишет строки ntf.delivery. Новые тревоги ждут 15 с, чтобы тревоги одного раунда ушли одним списком. «Решено» — только тем, кому писали о проблеме: ответом на первое сообщение и правкой первого. Раз в минуту: эскалация и утренний прогноз (ops.forecast + то, что отложено в тихие часы).
+- `PostgresTelegramStore.swift`: TelegramStore на таблицах ntf.*, ops.incident_ack, sys.kv; права через acc.permission_mode (alerts_receive, alerts_ack).
+- `TelegramService.swift`: сервис хаба (HubService): цикл бота (long polling), отправка очереди раз в 2 с, задачи раз в минуту; `TelegramSettings` — status / setToken / link / unlink для кабинета.
+- `monitor-hub telegram-link [логин]` и `deploy/telegram.sh`: токен и ссылка привязки до появления кабинетов.
+
+Для кабинета (тред «Кабинеты админов и права»): HTTP и права в HubWeb, внутри вызываются `TelegramSettings.status/setToken/link/unlink`. Настройки «Уведомления» пишут ntf.prefs.

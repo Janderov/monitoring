@@ -6,3 +6,4 @@ hub/.testmig/
 hub/.build/
 app/.build/
 hub/deploy/.env
+app/Package.resolved

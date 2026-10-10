@@ -213,7 +213,7 @@ final class ReportPostgresTests: XCTestCase {
         XCTAssertEqual(queued, 1)
         let repeated = try await store.queueNotice("Отчёты за сентябрь готовы: 1.", now: now)
         XCTAssertEqual(repeated, 0)
-        let text = try await db.scalar("SELECT payload->>'text' FROM ntf.delivery WHERE kind = 'report'", as: String.self)
+        let text = try await db.scalar("SELECT payload#>>'{message,text}' FROM ntf.delivery WHERE kind = 'report'", as: String.self)
         XCTAssertEqual(text, "Отчёты за сентябрь готовы: 1.")
 
         // The command line.

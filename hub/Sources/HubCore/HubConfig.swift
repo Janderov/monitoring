@@ -28,18 +28,22 @@ public struct HubConfig: Sendable {
     public var pdfURL: URL?
     /// Report PDFs and other files the hub keeps (`sys.file`).
     public var filesDir: URL
+    /// The Telegram bot's token from @BotFather; nil = no Telegram.
+    public var telegramToken: String?
 
-    public static let credentialNames = (key: "secret-key", heartbeat: "heartbeat-url", dbPassword: "db-password")
+    public static let credentialNames = (key: "secret-key", heartbeat: "heartbeat-url", dbPassword: "db-password",
+                                         telegram: "telegram-bot-token")
 
     public init(dbHost: String = "127.0.0.1", dbPort: Int = 5432, dbUser: String = "monitor",
                 dbName: String = "monitor", dbPassword: String? = nil, dbTLS: Bool = false,
                 migrationsDir: URL, secretKey: Data? = nil, heartbeatURL: URL? = nil, probeName: String = "Хаб",
                 http: (host: String, port: Int)? = nil, publicURL: String? = nil, pdfURL: URL? = nil,
-                filesDir: URL = URL(fileURLWithPath: "/var/lib/monitor-hub/files")) {
+                filesDir: URL = URL(fileURLWithPath: "/var/lib/monitor-hub/files"), telegramToken: String? = nil) {
         self.dbHost = dbHost; self.dbPort = dbPort; self.dbUser = dbUser; self.dbName = dbName
         self.dbPassword = dbPassword; self.dbTLS = dbTLS; self.migrationsDir = migrationsDir
         self.secretKey = secretKey; self.heartbeatURL = heartbeatURL; self.probeName = probeName
         self.http = http; self.publicURL = publicURL; self.pdfURL = pdfURL; self.filesDir = filesDir
+        self.telegramToken = telegramToken
     }
 
     public struct Error: Swift.Error, CustomStringConvertible {
@@ -69,6 +73,14 @@ public struct HubConfig: Sendable {
             }
             heartbeat = url
         }
+        var telegram: String?
+        if let text = credential(credentialNames.telegram) {
+            // "123456789:AA…" from @BotFather.
+            guard text.range(of: #"^[0-9]{5,}:[A-Za-z0-9_-]{30,}$"#, options: .regularExpression) != nil else {
+                throw Error("токен бота \(credentialNames.telegram) не похож на токен от @BotFather")
+            }
+            telegram = text
+        }
         return HubConfig(
             dbHost: env["PGHOST"] ?? "127.0.0.1",
             dbPort: Int(env["PGPORT"] ?? "") ?? 5432,
@@ -83,7 +95,8 @@ public struct HubConfig: Sendable {
             http: try listen(env["HUB_HTTP"]),
             publicURL: env["HUB_PUBLIC_URL"].flatMap { $0.isEmpty ? nil : $0 },
             pdfURL: env["HUB_PDF_URL"].flatMap { $0.isEmpty ? nil : URL(string: $0) },
-            filesDir: URL(fileURLWithPath: env["HUB_FILES"] ?? "/var/lib/monitor-hub/files"))
+            filesDir: URL(fileURLWithPath: env["HUB_FILES"] ?? "/var/lib/monitor-hub/files"),
+            telegramToken: telegram)
     }
 
     /// "8080", ":8080" or "127.0.0.1:8080".

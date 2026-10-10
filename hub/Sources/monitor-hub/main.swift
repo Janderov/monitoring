@@ -8,6 +8,8 @@ import Logging
 // monitor-hub import FILE [NAME]   — take servers, sites and history from the
 //                                    Mac's transfer file; password on stdin
 // monitor-hub new-key              — a fresh encryption key for the credentials folder
+// monitor-hub telegram-link [LOGIN] — a one-time t.me link that ties a Telegram
+//                                    chat to the account (the owner by default)
 // monitor-hub report …             — monthly client reports (see `report help`)
 
 LoggingSystem.bootstrap { label in
@@ -26,7 +28,8 @@ func fail(_ message: String) -> Never {
 do {
     switch args.first ?? "run" {
     case "run":
-        try await Hub(config: try HubConfig.fromEnvironment(), logger: logger).run()
+        let config = try HubConfig.fromEnvironment()
+        try await Hub(config: config, logger: logger, services: [TelegramService(config: config), ReportService(), ReportWebService(config: config)]).run()
     case "migrate":
         let hub = Hub(config: try HubConfig.fromEnvironment(), logger: logger)
         try await hub.withDatabase { _ in () }
@@ -46,6 +49,11 @@ do {
         print(report)
     case "new-key":
         print(SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }.base64EncodedString())
+    case "telegram-link":
+        let hub = Hub(config: try HubConfig.fromEnvironment(), logger: logger)
+        let login = args.count >= 2 ? args[1] : nil
+        let link = try await hub.withDatabase { db in try await TelegramLink.make(db, login: login) }
+        print(link)
     case "report":
         let config = try HubConfig.fromEnvironment()
         let out = try await Hub(config: config, logger: logger).withDatabase { db in
@@ -55,7 +63,7 @@ do {
     case "version", "--version":
         print(HubVersion.current)
     default:
-        fail("неизвестная команда \(args[0]); есть: run, migrate, import, new-key, report, version")
+        fail("неизвестная команда \(args[0]); есть: run, migrate, import, new-key, telegram-link, report, version")
     }
 } catch {
     fail("ошибка: \(HubError.describe(error))")

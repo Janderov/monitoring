@@ -11,6 +11,7 @@
 #   secret-key     encryption key for agent tokens in the database
 #   db-password    PostgreSQL password
 #   heartbeat-url  healthchecks.io ping address (empty file = no pulse)
+#   telegram-bot-token  the bot's token from @BotFather (empty file = no Telegram)
 name: monitor-hub
 
 services:
@@ -49,7 +50,7 @@ services:
       HUB_PUBLIC_URL: ${HUB_PUBLIC_URL:-}
       HUB_PDF_URL: http://pdf:3000
       TZ: Europe/Moscow
-    secrets: [secret-key, db-password, heartbeat-url]
+    secrets: [secret-key, db-password, heartbeat-url, telegram-bot-token]
     ports:
       - 127.0.0.1:8080:8080
     networks: [default, pdf]
@@ -111,6 +112,8 @@ secrets:
     file: ./secrets/db-password
   heartbeat-url:
     file: ./secrets/heartbeat-url
+  telegram-bot-token:
+    file: ./secrets/telegram-bot-token
 
 networks:
   pdf:

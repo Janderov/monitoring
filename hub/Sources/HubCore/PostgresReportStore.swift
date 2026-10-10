@@ -1,6 +1,7 @@
 import Crypto
 import Foundation
 import NIOCore
+import MonitorCore
 import MonitorReports
 import PostgresNIO
 
@@ -210,7 +211,7 @@ public struct PostgresReportStore: ReportStore {
     }
 
     /// «Отчёты за сентябрь готовы…» to the owner's Telegram, through the
-    /// common delivery queue (the Telegram sender sends `payload.text`).
+    /// common delivery queue that TelegramService sends.
     /// One per owner per hour at most. Returns how many were queued.
     @discardableResult
     public func queueNotice(_ text: String, now: Date) async throws -> Int {
@@ -218,7 +219,7 @@ public struct PostgresReportStore: ReportStore {
         let q: PostgresQuery = """
             INSERT INTO ntf.delivery (kind, account_id, channel, target, dedup_key, payload, next_attempt_at)
             SELECT 'report', a.id, 'telegram', t.chat_id::text, 'reports-ready:' || \(String(hour)) || ':' || a.id,
-                   jsonb_build_object('text', \(text)::text), now()
+                   \(DeliveryPayload(message: TelegramMessage(text)).json)::jsonb, now()
             FROM acc.account a
             JOIN ntf.telegram_link t ON t.account_id = a.id AND t.unlinked_at IS NULL AND NOT t.blocked_bot
             WHERE a.kind = 'owner' AND a.status = 'active'
