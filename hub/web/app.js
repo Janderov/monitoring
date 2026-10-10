@@ -998,7 +998,9 @@ async function telegramBlock(ownerSetup) {
     return box;
   }
   if (me.linked) {
-    add(box, [row(`Подключён: @${me.username || ''}`, me.linked_at ? 'с ' + fmtDate(me.linked_at) : null,
+    add(box, [row(`Подключён: @${me.username || ''}`,
+      me.blocked ? h('span', { class: 'err' }, 'Бот заблокирован: откройте его в Telegram и нажмите «Старт» снова')
+        : me.linked_at ? 'с ' + fmtDate(me.linked_at) : null,
       h('button', { onclick: e => act(async () => { await DEL('/api/telegram/link'); toast('Telegram отключён'); route(); }, e.target) }, 'Отключить'))]);
   } else {
     add(box, [row('Подключить Telegram', `Откроется бот @${bot.username || ''}, нажмите в нём «Start».`,
