@@ -105,6 +105,7 @@ public enum TelegramSettings {
         public var chat: String?
         /// The person blocked the bot: messages do not arrive.
         public var blocked: Bool
+        public var linkedAt: Date?
     }
 
     public struct Failure: Error, CustomStringConvertible {
@@ -116,11 +117,12 @@ public enum TelegramSettings {
                                       as: String.self)
         let configured = try await db.scalar("SELECT count(*) FROM sys.secret WHERE kind = 'api_token' AND label = \(label)",
                                              as: Int64.self) ?? 0 > 0
-        var s = Status(configured: configured || bot != nil, username: bot, linked: false, chat: nil, blocked: false)
-        for try await (user, blocked) in try await db.query("""
-            SELECT tg_username, blocked_bot FROM ntf.telegram_link WHERE account_id = \(account) AND unlinked_at IS NULL
-            """).decode((String?, Bool).self) {
+        var s = Status(configured: configured || bot != nil, username: bot, linked: false, chat: nil, blocked: false, linkedAt: nil)
+        for try await (user, blocked, at) in try await db.query("""
+            SELECT tg_username, blocked_bot, linked_at FROM ntf.telegram_link WHERE account_id = \(account) AND unlinked_at IS NULL
+            """).decode((String?, Bool, Date).self) {
             s.linked = true
+            s.linkedAt = at
             s.chat = user.map { "@" + $0 }
             s.blocked = blocked
         }

@@ -1,6 +1,8 @@
 import Crypto
 import Foundation
+import HubAccounts
 import HubCore
+import HubWeb
 import Logging
 
 // monitor-hub run                  — the hub itself (systemd / Docker runs this)
@@ -8,6 +10,9 @@ import Logging
 // monitor-hub import FILE [NAME]   — take servers, sites and history from the
 //                                    Mac's transfer file; password on stdin
 // monitor-hub new-key              — a fresh encryption key for the credentials folder
+// monitor-hub owner-invite [LOGIN] [NAME] [--reset]
+//                                  — the owner's link to the web cabinet (first
+//                                    time, or after a lost password or phone)
 // monitor-hub telegram-link [LOGIN] — a one-time t.me link that ties a Telegram
 //                                    chat to the account (the owner by default)
 // monitor-hub report …             — monthly client reports (see `report help`)
@@ -18,6 +23,9 @@ LoggingSystem.bootstrap { label in
     return h
 }
 let logger = Logger(label: "monitor-hub")
+
+/// Every part of the hub with web routes. Add yours here.
+let webModules: [any WebModule] = [CabinetModule(), TelegramModule()]
 let args = Array(CommandLine.arguments.dropFirst())
 
 func fail(_ message: String) -> Never {
@@ -29,7 +37,32 @@ do {
     switch args.first ?? "run" {
     case "run":
         let config = try HubConfig.fromEnvironment()
-        try await Hub(config: config, logger: logger, services: [TelegramService(config: config), ReportService(), ReportWebService(config: config)]).run()
+        let web = try WebConfig.fromEnvironment()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await Hub(config: config, logger: logger, services: [TelegramService(config: config), ReportService(), ReportWebService(config: config)]).run() }
+            if let web {
+                group.addTask {
+                    try await WebServer(config: config, web: web, modules: webModules, logger: logger).run()
+                }
+            }
+            try await group.next()
+            group.cancelAll()
+        }
+    case "owner-invite":
+        let config = try HubConfig.fromEnvironment()
+        let rest = args.dropFirst().filter { $0 != "--reset" }
+        let login = rest.first ?? "owner"
+        let name = rest.dropFirst().first ?? "Владелец"
+        let token = try await Hub(config: config, logger: logger).withDatabase { db in
+            let accounts = Accounts(db: db, box: try config.secretKey.map { try SecretBox(key: $0) })
+            return try await accounts.ownerInvite(login: login, name: name, reset: args.contains("--reset"))
+        }
+        let path = "/#/invite/\(token)"
+        if let base = (try? WebConfig.fromEnvironment())??.publicURL {
+            print("Откройте в браузере в течение 48 часов:\n\(base.absoluteString)\(path)")
+        } else {
+            print("Откройте адрес кабинета и допишите в конце: \(path)")
+        }
     case "migrate":
         let hub = Hub(config: try HubConfig.fromEnvironment(), logger: logger)
         try await hub.withDatabase { _ in () }
@@ -63,7 +96,7 @@ do {
     case "version", "--version":
         print(HubVersion.current)
     default:
-        fail("неизвестная команда \(args[0]); есть: run, migrate, import, new-key, telegram-link, report, version")
+        fail("неизвестная команда \(args[0]); есть: run, migrate, import, new-key, owner-invite, telegram-link, report, version")
     }
 } catch {
     fail("ошибка: \(HubError.describe(error))")
