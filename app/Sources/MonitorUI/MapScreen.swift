@@ -66,7 +66,7 @@ struct MapScreen: View {
 
     private var pins: [Pin] {
         var byPlace: [String: Pin] = [:]
-        for s in model.visible {
+        for s in model.filtered {
             if onlyProblems && s.alerts.isEmpty { continue }
             guard let c = locations.coordinate(for: s.server) else { continue }
             let key = String(format: "%.2f,%.2f", c.latitude, c.longitude)
@@ -76,7 +76,7 @@ struct MapScreen: View {
     }
 
     private var unplaced: [ServerStatus] {
-        model.visible.filter { locations.coordinate(for: $0.server) == nil }
+        model.filtered.filter { locations.coordinate(for: $0.server) == nil }
     }
 
     private func macCoordinate(_ pins: [Pin]) -> CLLocationCoordinate2D {
@@ -150,7 +150,7 @@ struct MapScreen: View {
     }
 
     private func subtitle(_ d: Scene) -> String {
-        "\(model.visible.count) серверов" + (d.routes.isEmpty ? "" : " · маршрутов VPN: \(d.routes.count)")
+        "\(model.filtered.count) серверов" + (d.routes.isEmpty ? "" : " · маршрутов VPN: \(d.routes.count)")
     }
 
     private func content(_ d: Scene) -> some View {
@@ -400,7 +400,7 @@ struct MapScreen: View {
             .onChange(of: clientsByCity) { _, on in if on { clientCities.request(clientIPs) } }
             .onChange(of: hopIPs, initial: true) { _, ips in external.request(ips) }
             .onAppear {
-                locations.resetMovedOnce(model.visible.map(\.server))
+                locations.resetMovedOnce(model.filtered.map(\.server))
                 // Opening the map from a server's menu selects its pin.
                 if let id = model.selectedServerID, let pin = pins.first(where: { $0.statuses.contains { $0.id == id } }) {
                     selectedPin = pin.id
@@ -565,7 +565,7 @@ struct MapScreen: View {
     @MapContentBuilder
     private func macCheckLayer(_ macAt: CLLocationCoordinate2D) -> some MapContent {
         if showMacChecks, showMac, !inPast {
-            ForEach(model.visible) { s in
+            ForEach(model.filtered) { s in
                 if let p = probes.probes[s.id], let b = coordinate(s.id), !same(macAt, b) {
                     MapPolyline(coordinates: [macAt, b], contourStyle: .geodesic)
                         .stroke(p.ok ? RouteStyle.macTint.opacity(0.45) : Color.red.opacity(0.8),
@@ -604,7 +604,7 @@ struct MapScreen: View {
     private func siteClusters(_ pins: [Pin]) -> [SiteCluster] {
         let levels = siteLevels()
         var byKey: [String: SiteCluster] = [:]
-        for site in model.sites {
+        for site in model.sites where model.inScope(site: site.id) {
             if onlyProblems, let l = levels[site.id], l != .warning, l != .critical { continue }
             if let sid = siteHosts.server[site.id] {
                 guard let pin = pins.first(where: { $0.statuses.contains { $0.id == sid } }) else { continue }
@@ -717,10 +717,24 @@ struct MapScreen: View {
         ForEach(pins) { pin in
             Annotation(pin.title, coordinate: pin.coordinate, anchor: .center) {
                 PinView(level: level(of: pin), count: pin.statuses.count, load: load(of: pin),
-                        soon: soonBadge(pin), off: pin.statuses.contains { $0.id == whatIf?.off })
+                        soon: soonBadge(pin), off: pin.statuses.contains { $0.id == whatIf?.off },
+                        ring: clientRing(pin))
+                    // A client chosen in the sidebar: the rest stays, dimmed,
+                    // so the paths still read.
+                    .opacity(dimmed(pin) ? 0.25 : 1)
             }
             .tag(pin.id)
         }
+    }
+
+    private func dimmed(_ pin: Pin) -> Bool {
+        model.clientScope != nil && !pin.statuses.contains { model.inScope(server: $0.id) }
+    }
+
+    /// The chosen client's colour around its servers.
+    private func clientRing(_ pin: Pin) -> Color? {
+        guard let c = model.scopeClient, !dimmed(pin) else { return nil }
+        return c.color.color
     }
 
     /// The pin's yellow dot: a certificate, domain or disk runs out within two weeks.
@@ -873,12 +887,17 @@ private struct PinView: View {
     var soon = false
     /// Switched off "on paper" in the Разбор mode.
     var off = false
+    /// The colour of the client chosen in the sidebar.
+    var ring: Color? = nil
 
     var body: some View {
         let size: CGFloat = count > 1 ? 22 : 14
         ZStack {
             if off {
                 Circle().strokeBorder(Color.red, lineWidth: 2.5).frame(width: size + 18, height: size + 18)
+            }
+            if let ring {
+                Circle().strokeBorder(ring, lineWidth: 2.5).frame(width: size + 14, height: size + 14)
             }
             if level == .critical {
                 Circle().fill(level.color.opacity(0.18)).frame(width: 34, height: 34)

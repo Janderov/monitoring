@@ -66,6 +66,8 @@ struct ServersScreen: View {
             .width(min: 110, ideal: 150)
             TableColumn("Группа", value: \.group) { r in Text(r.group).foregroundStyle(.secondary).help(r.group) }
                 .width(min: 60, ideal: 96)
+            TableColumn("Клиент") { r in ClientTags(clients: model.ownerClients(server: r.id)) }
+                .width(min: 60, ideal: 96)
             TableColumn("CPU", value: \.cpu) { r in metric(r.cpu, warn: r.status.alerts.contains { $0.key.hasPrefix("cpu") }) }
                 .width(min: 44, ideal: 52)
             TableColumn("Память", value: \.mem) { r in metric(r.mem, warn: r.status.alerts.contains { $0.key.hasPrefix("mem") }) }
