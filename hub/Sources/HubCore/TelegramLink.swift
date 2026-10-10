@@ -3,8 +3,8 @@ import MonitorCore
 import PostgresNIO
 
 /// `monitor-hub telegram-link [LOGIN]`: the link the cabinet's «Подключить
-/// Telegram» will show, for use before the cabinet exists. Without a login it
-/// is the owner's account, made on first use if there is none yet.
+/// Telegram» shows, from the command line. Without a login it
+/// is the owner's account.
 public enum TelegramLink {
     public struct Failure: Error, CustomStringConvertible {
         public var description: String
@@ -18,14 +18,11 @@ public enum TelegramLink {
                 throw Failure(description: "нет активной учётной записи \(login)")
             }
             account = a
-        } else if let a = try await db.scalar("SELECT id FROM acc.account WHERE kind = 'owner'", as: UUID.self) {
+        } else if let a = try await db.scalar("SELECT id FROM acc.account WHERE kind = 'owner' AND status = 'active'",
+                                              as: UUID.self) {
             account = a
         } else {
-            let name = ProcessInfo.processInfo.environment["HUB_OWNER_NAME"] ?? "Владелец"
-            account = try await db.scalar("""
-                INSERT INTO acc.account (login, display_name, kind, status) VALUES ('owner', \(name), 'owner', 'active')
-                RETURNING id
-                """, as: UUID.self)!
+            throw Failure(description: "нет учётной записи владельца: сначала monitor-hub owner-invite и вход в кабинет")
         }
         let url = try await TelegramSettings.link(db, account: account, now: now).url
         return """

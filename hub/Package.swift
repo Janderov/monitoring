@@ -17,6 +17,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-nio-ssl.git", "2.27.0"..<"3.0.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"4.0.0"),
         .package(url: "https://github.com/apple/swift-log.git", "1.5.0"..<"2.0.0"),
+        .package(url: "https://github.com/hummingbird-project/hummingbird.git", "2.5.0"..<"3.0.0"),
     ],
     targets: [
         .target(name: "HubCore", dependencies: [
@@ -29,7 +30,31 @@ let package = Package(
             .product(name: "Crypto", package: "swift-crypto"),
             .product(name: "Logging", package: "swift-log"),
         ]),
-        .executableTarget(name: "monitor-hub", dependencies: ["HubCore"]),
+        // Password hashing for people's logins (argon2id); libargon2-dev on Linux.
+        .systemLibrary(name: "CArgon2", path: "Sources/CArgon2", pkgConfig: "libargon2",
+                       providers: [.apt(["libargon2-dev"]), .brew(["argon2"])]),
+        // People: accounts, invites, two-step login, sessions, permissions,
+        // approvals, the audit log and personal settings. No HTTP here.
+        .target(name: "HubAccounts", dependencies: [
+            "HubCore", "CArgon2",
+            .product(name: "PostgresNIO", package: "postgres-nio"),
+            .product(name: "NIOCore", package: "swift-nio"),
+            .product(name: "Crypto", package: "swift-crypto"),
+            .product(name: "Logging", package: "swift-log"),
+        ]),
+        // The hub's one web server: the cabinet for the owner and staff, and
+        // the routes other parts register (WebModule).
+        .target(name: "HubWeb", dependencies: [
+            "HubCore", "HubAccounts",
+            .product(name: "Hummingbird", package: "hummingbird"),
+            .product(name: "PostgresNIO", package: "postgres-nio"),
+            .product(name: "Logging", package: "swift-log"),
+        ]),
+        .executableTarget(name: "monitor-hub", dependencies: ["HubCore", "HubAccounts", "HubWeb"]),
         .testTarget(name: "HubCoreTests", dependencies: ["HubCore"]),
+        .testTarget(name: "HubAccountsTests", dependencies: [
+            "HubAccounts", "HubWeb",
+            .product(name: "HummingbirdTesting", package: "hummingbird"),
+        ]),
     ]
 )
