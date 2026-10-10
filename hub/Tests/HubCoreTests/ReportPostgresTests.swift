@@ -171,29 +171,6 @@ final class ReportPostgresTests: XCTestCase {
             try file.body.write(to: URL(fileURLWithPath: env["HUB_TEST_PDF_OUT"] ?? "/tmp/report-test.pdf"))
         }
 
-        // Over HTTP, with the safety headers.
-        let port = PortBox()
-        let server = Task {
-            try await ReportServer.run(host: "127.0.0.1", port: 0, web: web, logger: logger) { p in Task { await port.set(p) } }
-        }
-        defer { server.cancel() }
-        var bound = 0
-        for _ in 0..<50 where bound == 0 {
-            try await Task.sleep(nanoseconds: 50_000_000)
-            bound = await port.value
-        }
-        let base = "http://127.0.0.1:\(bound)"
-        let (body, resp) = try await URLSession.shared.data(from: URL(string: "\(base)/r/\(token.value)")!)
-        let http = try XCTUnwrap(resp as? HTTPURLResponse)
-        XCTAssertEqual(http.statusCode, 200)
-        XCTAssertTrue(String(decoding: body, as: UTF8.self).contains("ООО «Пример»"))
-        XCTAssertEqual(http.value(forHTTPHeaderField: "Referrer-Policy"), "no-referrer")
-        XCTAssertTrue(http.value(forHTTPHeaderField: "Content-Security-Policy")?.contains("default-src 'none'") == true)
-        let (_, missing) = try await URLSession.shared.data(from: URL(string: "\(base)/r/AAAAAAAAAAAAAAAAAAAAAA")!)
-        XCTAssertEqual((missing as? HTTPURLResponse)?.statusCode, 404)
-        let (ok, _) = try await URLSession.shared.data(from: URL(string: "\(base)/healthz")!)
-        XCTAssertEqual(String(decoding: ok, as: UTF8.self), "ok")
-
         // A permanent client link opens the newest sent report.
         let permanent = try await store.clientLink(client, by: nil)
         let newest = try await store.open(permanent)
@@ -231,7 +208,3 @@ actor Counter {
     func add() { value += 1 }
 }
 
-actor PortBox {
-    var value = 0
-    func set(_ p: Int) { value = p }
-}

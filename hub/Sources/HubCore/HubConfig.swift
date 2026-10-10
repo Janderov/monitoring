@@ -20,8 +20,6 @@ public struct HubConfig: Sendable {
     public var heartbeatURL: URL?
     /// The hub's own name as a check point (inv.probe).
     public var probeName: String
-    /// Where the client report page listens ("0.0.0.0:8080"); nil = no page.
-    public var http: (host: String, port: Int)?
     /// The address clients open, behind the TLS proxy ("https://reports.example.com").
     public var publicURL: String?
     /// Gotenberg (PDF printing); nil = no «Скачать PDF».
@@ -37,12 +35,12 @@ public struct HubConfig: Sendable {
     public init(dbHost: String = "127.0.0.1", dbPort: Int = 5432, dbUser: String = "monitor",
                 dbName: String = "monitor", dbPassword: String? = nil, dbTLS: Bool = false,
                 migrationsDir: URL, secretKey: Data? = nil, heartbeatURL: URL? = nil, probeName: String = "Хаб",
-                http: (host: String, port: Int)? = nil, publicURL: String? = nil, pdfURL: URL? = nil,
+                publicURL: String? = nil, pdfURL: URL? = nil,
                 filesDir: URL = URL(fileURLWithPath: "/var/lib/monitor-hub/files"), telegramToken: String? = nil) {
         self.dbHost = dbHost; self.dbPort = dbPort; self.dbUser = dbUser; self.dbName = dbName
         self.dbPassword = dbPassword; self.dbTLS = dbTLS; self.migrationsDir = migrationsDir
         self.secretKey = secretKey; self.heartbeatURL = heartbeatURL; self.probeName = probeName
-        self.http = http; self.publicURL = publicURL; self.pdfURL = pdfURL; self.filesDir = filesDir
+        self.publicURL = publicURL; self.pdfURL = pdfURL; self.filesDir = filesDir
         self.telegramToken = telegramToken
     }
 
@@ -92,22 +90,10 @@ public struct HubConfig: Sendable {
             secretKey: key,
             heartbeatURL: heartbeat,
             probeName: env["HUB_NAME"] ?? "Хаб",
-            http: try listen(env["HUB_HTTP"]),
             publicURL: env["HUB_PUBLIC_URL"].flatMap { $0.isEmpty ? nil : $0 },
             pdfURL: env["HUB_PDF_URL"].flatMap { $0.isEmpty ? nil : URL(string: $0) },
             filesDir: URL(fileURLWithPath: env["HUB_FILES"] ?? "/var/lib/monitor-hub/files"),
             telegramToken: telegram)
-    }
-
-    /// "8080", ":8080" or "127.0.0.1:8080".
-    static func listen(_ text: String?) throws -> (host: String, port: Int)? {
-        guard let text, !text.isEmpty else { return nil }
-        let parts = text.split(separator: ":", omittingEmptySubsequences: false)
-        guard let port = Int(parts.last ?? ""), (0...65535).contains(port), parts.count <= 2 else {
-            throw Error("HUB_HTTP должен быть порт или адрес:порт, например 0.0.0.0:8080")
-        }
-        let host = parts.count == 2 && !parts[0].isEmpty ? String(parts[0]) : "0.0.0.0"
-        return (host, port)
     }
 
     static func credentialsFolder(_ env: [String: String]) -> URL? {

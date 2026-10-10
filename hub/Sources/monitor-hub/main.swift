@@ -25,7 +25,7 @@ LoggingSystem.bootstrap { label in
 let logger = Logger(label: "monitor-hub")
 
 /// Every part of the hub with web routes. Add yours here.
-let webModules: [any WebModule] = [CabinetModule(), TelegramModule()]
+let webModules: [any WebModule] = [CabinetModule(), TelegramModule(), ReportsWebModule()]
 let args = Array(CommandLine.arguments.dropFirst())
 
 func fail(_ message: String) -> Never {
@@ -39,7 +39,7 @@ do {
         let config = try HubConfig.fromEnvironment()
         let web = try WebConfig.fromEnvironment()
         try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { try await Hub(config: config, logger: logger, services: [TelegramService(config: config), ReportService(), ReportWebService(config: config)]).run() }
+            group.addTask { try await Hub(config: config, logger: logger, services: [TelegramService(config: config), ReportService()]).run() }
             if let web {
                 group.addTask {
                     try await WebServer(config: config, web: web, modules: webModules, logger: logger).run()
