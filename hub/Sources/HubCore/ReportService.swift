@@ -57,34 +57,3 @@ public struct ReportService: HubService {
             """)
     }
 }
-
-/// The client link page (`ReportServer` on HUB_HTTP), with PDF when Gotenberg
-/// is configured. Until the cabinet's web server takes the /r/ routes over.
-/// It must never stop the checks: on an error it waits a minute and binds again.
-public struct ReportWebService: HubService {
-    public var name: String { "report-links" }
-    let config: HubConfig
-
-    public init(config: HubConfig) { self.config = config }
-
-    public func run(_ db: Database, logger: Logger) async throws {
-        guard let http = config.http else {
-            // Nothing to serve; stay up like the other services.
-            while !Task.isCancelled { try await Task.sleep(nanoseconds: 3_600_000_000_000) }
-            return
-        }
-        let web = Self.web(db, config: config, logger: logger)
-        while !Task.isCancelled {
-            do { try await ReportServer.run(host: http.host, port: http.port, web: web, logger: logger) } catch {
-                logger.error("страница отчётов: \(HubError.describe(error))")
-            }
-            try await Task.sleep(nanoseconds: 60_000_000_000)
-        }
-    }
-
-    public static func web(_ db: Database, config: HubConfig, logger: Logger) -> ReportWeb {
-        let store = PostgresReportStore(db: db)
-        let pdf = config.pdfURL.map { ReportPDF(store: store, filesDir: config.filesDir, render: ReportPDF.gotenberg($0)) }
-        return ReportWeb(open: { try await store.open($0) }, pdf: pdf.map { p in { @Sendable s in try await p.pdf(s) } }, logger: logger)
-    }
-}

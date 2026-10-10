@@ -172,5 +172,5 @@ cd /opt/monitor-hub/src && bash hub/deploy/install.sh
 - Команды: `monitor-hub run | migrate | import FILE [ИМЯ] | new-key | report … | version`.
 - Отчёты: сборка и страница — общие с приложением (`app/Sources/MonitorReports`),
   здесь — база (`PostgresReportStore`), дневные итоги (`DailyRollup`),
-  страница по ссылке (`ReportServer`, переменная `HUB_HTTP`) и PDF (`ReportPDF`,
+  страница по ссылке (`ReportWeb`, на общем веб-сервере как `ReportsWebModule` в HubWeb) и PDF (`ReportPDF`,
   `HUB_PDF_URL`, файлы в `HUB_FILES`).

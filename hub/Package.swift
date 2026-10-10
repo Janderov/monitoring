@@ -55,6 +55,7 @@ let package = Package(
         .testTarget(name: "HubCoreTests", dependencies: ["HubCore"]),
         .testTarget(name: "HubAccountsTests", dependencies: [
             "HubAccounts", "HubWeb",
+            .product(name: "MonitorReports", package: "app"),
             .product(name: "HummingbirdTesting", package: "hummingbird"),
         ]),
     ]

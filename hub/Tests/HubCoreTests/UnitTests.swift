@@ -112,9 +112,7 @@ final class ConfigTests: XCTestCase {
 final class ReportWebTests: XCTestCase {
     let web = ReportWeb(open: { _ in nil }, pdf: nil, logger: Logger(label: "test"))
 
-    func testOnlyReportLinksAndHealth() async {
-        let health = await web.respond(method: .GET, uri: "/healthz")
-        XCTAssertEqual(health.status, .ok)
+    func testOnlyReportLinks() async {
         for uri in ["/", "/r/", "/r/short", "/r/AAAAAAAAAAAAAAAAAAAAAA", "/r/AAAAAAAAAAAAAAAAAAAAAA/pdf",
                     "/r/AAAAAAAAAAAAAAAAAAAAAA/x", "/r/../../etc/passwd", "/r/AAAAAAAAAAAAAAAAAAAA%2F"] {
             let r = await web.respond(method: .GET, uri: uri)
@@ -122,14 +120,6 @@ final class ReportWebTests: XCTestCase {
         }
         let post = await web.respond(method: .POST, uri: "/r/AAAAAAAAAAAAAAAAAAAAAA")
         XCTAssertEqual(post.status, .methodNotAllowed)
-    }
-
-    func testListenAddress() throws {
-        XCTAssertEqual(try HubConfig.listen("8080")?.port, 8080)
-        XCTAssertEqual(try HubConfig.listen("8080")?.host, "0.0.0.0")
-        XCTAssertEqual(try HubConfig.listen("127.0.0.1:9000")?.host, "127.0.0.1")
-        XCTAssertNil(try HubConfig.listen(""))
-        XCTAssertThrowsError(try HubConfig.listen("localhost"))
     }
 
     func testPDFKeyChangesWithThePage() {
