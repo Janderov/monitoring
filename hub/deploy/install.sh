@@ -53,19 +53,17 @@ if [ ! -e "$SECRETS/telegram-bot-token" ]; then
   fi
   printf '%s\n' "$token" > "$SECRETS/telegram-bot-token"
 fi
-# Client report links (https://ДОМЕН/r/…): optional, asked once; an empty file = no links yet.
-if [ ! -e "$DIR/report-domain" ]; then
+# The web cabinet's address. Its DNS A record must point at this VPS.
+if [ ! -e "$DIR/hub.env" ]; then
   domain=""
   if [ -t 0 ] || [ -e /dev/tty ]; then
-    read -r -p "Домен для ссылок на отчёты клиентам (например reports.example.com), Enter — позже: " domain </dev/tty || true
+    read -r -p "Адрес кабинета и ссылок на отчёты (например hub.example.com), Enter — позже: " domain </dev/tty || true
   fi
-  printf '%s\n' "$domain" > "$DIR/report-domain"
-fi
-domain=$(tr -d '[:space:]' < "$DIR/report-domain")
-if [ -n "$domain" ]; then
-  printf 'COMPOSE_PROFILES=web\nHUB_DOMAIN=%s\nHUB_PUBLIC_URL=https://%s\n' "$domain" "$domain" > "$DIR/compose.env"
-else
-  : > "$DIR/compose.env"
+  if [ -n "$domain" ]; then
+    printf 'HUB_DOMAIN=%s\nCOMPOSE_PROFILES=web\n' "$domain" > "$DIR/hub.env"
+  else
+    : > "$DIR/hub.env"
+  fi
 fi
 chown -R 10001 "$SECRETS" "$DIR/import"
 chmod 600 "$SECRETS"/*
@@ -73,7 +71,7 @@ chmod 600 "$SECRETS"/*
 ln -sfn "$SECRETS" "$COMPOSE_DIR/secrets"
 ln -sfn "$DIR/backups" "$COMPOSE_DIR/backups"
 ln -sfn "$DIR/import" "$COMPOSE_DIR/import"
-ln -sfn "$DIR/compose.env" "$COMPOSE_DIR/.env"
+ln -sfn "$DIR/hub.env" "$COMPOSE_DIR/.env"
 
 say "4/5 Собираю и запускаю (первый раз несколько минут)"
 cd "$COMPOSE_DIR"
@@ -90,10 +88,14 @@ cat <<MSG
 Готово. Хаб $VERSION работает и будет перезапускаться сам после сбоев и перезагрузки VPS.
 
 Что дальше:
+  • Первый вход в веб-кабинет (ссылка на 48 часов):
+                                         cd $COMPOSE_DIR && docker compose exec hub monitor-hub owner-invite
   • Перенести серверы и историю с Mac:  $DIR/src/hub/deploy/import.sh ФАЙЛ.monitortransfer
   • Посмотреть, что делает хаб:          cd $COMPOSE_DIR && docker compose logs -f hub
   • Обновить хаб:                        запустите этот же скрипт ещё раз
   • Отчёты клиентам:                     cd $COMPOSE_DIR && docker compose exec hub monitor-hub report help
+
+Кабинет: $(grep -q HUB_DOMAIN "$DIR/hub.env" && sed -n 's/^HUB_DOMAIN=/https:\/\//p' "$DIR/hub.env" || echo "не включён (впишите HUB_DOMAIN и COMPOSE_PROFILES=web в $DIR/hub.env и запустите скрипт ещё раз)")
 
 Сохраните копию $SECRETS/secret-key в надёжном месте: без него токены
 агентов в базе не расшифровать (их можно заново перенести с Mac).

@@ -1,0 +1,7 @@
+# HTTPS in front of the hub's web cabinet. The certificate comes from
+# Let's Encrypt as soon as the domain points at this VPS.
+{$HUB_DOMAIN} {
+	encode zstd gzip
+	header -Server
+	reverse_proxy hub:8080
+}

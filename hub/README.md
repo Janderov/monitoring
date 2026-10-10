@@ -56,6 +56,29 @@ PostgreSQL 18. Mac можно закрыть — проверки не оста�
    ```
    В журнале должна быть строка `hub started`.
 
+## Веб-кабинет для вас и сотрудников
+
+Кабинет открывается в браузере по HTTPS: вход по паролю и коду из
+приложения на телефоне (Яндекс Ключ, Google Authenticator), сотрудники и их
+права, согласования, журнал действий, оформление.
+
+1. Заведите адрес для кабинета, например `hub.ваш-домен.ru`: у регистратора
+   домена добавьте запись **A** с адресом этого VPS.
+2. Запустите установку (или ещё раз, если хаб уже стоит). На вопрос
+   «Адрес кабинета» введите этот адрес. Сертификат HTTPS появится сам.
+   Ответ хранится в `/opt/monitor-hub/hub.env`.
+3. Получите ссылку для первого входа владельца:
+   ```
+   cd /opt/monitor-hub/src/hub/deploy && docker compose exec hub monitor-hub owner-invite
+   ```
+   Откройте ссылку в течение 48 часов, задайте пароль, отсканируйте
+   QR-код телефоном и сохраните запасные коды.
+4. Потеряли телефон и запасные коды? Та же команда с `--reset` даёт новую
+   ссылку: `docker compose exec hub monitor-hub owner-invite owner Владелец --reset`.
+
+Сотрудников приглашаете в кабинете: «Сотрудники» → «Пригласить
+сотрудника…». Ссылку отправляете человеку лично.
+
 ## Telegram: тревоги на телефон
 
 1. В Telegram откройте @BotFather → `/newbot`, придумайте имя и адрес бота
@@ -72,8 +95,7 @@ PostgreSQL 18. Mac можно закрыть — проверки не оста�
    /opt/monitor-hub/src/hub/deploy/telegram.sh link
    ```
    Откройте ссылку на телефоне в течение 10 минут и нажмите «Старт». Бот
-   ответит «Готово». Для сотрудника: `telegram.sh link его_логин` (пока нет
-   кабинетов; потом это кнопка «Подключить Telegram» в кабинете).
+   ответит «Готово». Для сотрудника: `telegram.sh link его_логин` (или кнопка «Подключить Telegram» в кабинете).
 
 Кому что приходит, тихие часы, «Беру», эскалация через 15 минут —
 см. `docs/telegram.md`.
@@ -169,8 +191,14 @@ cd /opt/monitor-hub/src && bash hub/deploy/install.sh
   `HUB_TEST_AGENT_TOKEN`, `HUB_TEST_AGENT_FP`.
 - С печатью PDF: `HUB_TEST_PDF=http://127.0.0.1:3000` и запущенный
   `docker run -p 3000:3000 gotenberg/gotenberg:8`.
-- Команды: `monitor-hub run | migrate | import FILE [ИМЯ] | new-key | report … | version`.
+- Команды: `monitor-hub run | migrate | import FILE [ИМЯ] | new-key | owner-invite [ЛОГИН] [ИМЯ] [--reset] | report … | version`.
 - Отчёты: сборка и страница — общие с приложением (`app/Sources/MonitorReports`),
   здесь — база (`PostgresReportStore`), дневные итоги (`DailyRollup`),
   страница по ссылке (`ReportWeb`, на общем веб-сервере как `ReportsWebModule` в HubWeb) и PDF (`ReportPDF`,
   `HUB_PDF_URL`, файлы в `HUB_FILES`).
+- Веб-кабинет: `Sources/HubWeb` (сервер, общий для всех частей хаба: свои
+  маршруты добавляют через `WebModule` и список `webModules` в `main.swift`),
+  `Sources/HubAccounts` (люди, права, вход), страницы в `web/` (без сборки,
+  обычные HTML/CSS/JS). Переменные: `HUB_HTTP=0.0.0.0:8080` (по умолчанию
+  выключен), `HUB_PUBLIC_URL=https://…`, `HUB_TRUST_PROXY=1` за Caddy,
+  `HUB_WEB` — папка со страницами. Для сборки нужен `libargon2-dev`.
