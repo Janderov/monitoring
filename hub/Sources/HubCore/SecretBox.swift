@@ -20,6 +20,8 @@ public struct SecretBox: Sendable {
         /// Ciphertext followed by the 16-byte tag.
         public var ciphertext: [UInt8]
         public var nonce: [UInt8]
+
+        public init(ciphertext: [UInt8], nonce: [UInt8]) { self.ciphertext = ciphertext; self.nonce = nonce }
     }
 
     public func seal(_ plaintext: String, id: UUID, kind: String) throws -> Sealed {
