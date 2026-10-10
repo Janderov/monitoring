@@ -128,6 +128,17 @@ SQL: [db/migrations/0001_init.sql](../db/migrations/0001_init.sql). Провер
 сначала привязываются к клиенту «Своё». Токены агентов шифруются заново ключом хаба. Импорт можно
 повторять (`sys.import_batch`).
 
+**Перенос клиентов из `clients.json`** (файл приложения на Mac, формат `ClientBook`):
+
+| В `clients.json` | В базе |
+|---|---|
+| `clients[]` | `inv.client`; `state` → `status`, `isInternal` → `is_internal`; id уже uuid и переносятся как есть |
+| `clients[].contacts[]` | `inv.client_contact`; `telegram` → `telegram`, а `telegram_chat_id` заполнится после привязки через бота |
+| `clients[].contracts[]` | `inv.client_contract`; `reportDay` действующего договора → `rep.client_report_settings.day_of_month` |
+| `assets[]` | `inv.client_asset`; `assetID` сервера и сайта (старый текстовый id) → uuid через `sys.legacy_id`; у VPN-ключа `assetID` — публичный ключ, он тоже идёт через `sys.legacy_id` (kind `vpn_key`) |
+
+Порядок импорта: серверы и сайты, VPN-ключи, клиенты, привязки. Тогда все ссылки уже существуют.
+
 ## Что сознательно не входит
 
 - Несколько независимых компаний в одной установке. Клиенты здесь — ваши заказчики, а не
