@@ -7,6 +7,15 @@ import PostgresNIO
 /// checks, domain expiry, backfill from the agents' history) on PostgreSQL,
 /// plus the outside pulse and a record of every round in sys.job_run, so
 /// "the hub is up but polling is stuck" is visible.
+/// A part of the hub that other features add (the web cabinet, Telegram,
+/// monthly reports): started with the hub after the database is migrated,
+/// stopped with it. A service that throws stops the hub, so systemd or
+/// Docker restarts everything.
+public protocol HubService: Sendable {
+    var name: String { get }
+    func run(_ db: Database, logger: Logger) async throws
+}
+
 public actor Hub {
     let config: HubConfig
     let logger: Logger
@@ -21,10 +30,13 @@ public actor Hub {
     /// How often the server and site lists are re-read from the database.
     public static let reloadEvery: TimeInterval = 60
 
-    public init(config: HubConfig, logger: Logger) {
+    let services: [any HubService]
+
+    public init(config: HubConfig, logger: Logger, services: [any HubService] = []) {
         self.config = config
         self.logger = logger
         self.db = Database(config, logger: logger)
+        self.services = services
     }
 
     /// Runs until cancelled.
@@ -71,12 +83,29 @@ public actor Hub {
         await poller.start()
         logger.info("hub started: \(inventory.servers.count) servers, \(inventory.sites.count) sites")
 
-        while !Task.isCancelled {
-            try await Task.sleep(nanoseconds: UInt64(Self.reloadEvery * 1_000_000_000))
-            do { try await reload(box: box) } catch { logger.error("reload failed: \(HubError.describe(error))") }
-            await pulse()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for service in services {
+                let db = self.db, logger = self.logger
+                group.addTask {
+                    logger.info("service \(service.name) started")
+                    try await service.run(db, logger: logger)
+                }
+            }
+            group.addTask {
+                while !Task.isCancelled {
+                    try await Task.sleep(nanoseconds: UInt64(Self.reloadEvery * 1_000_000_000))
+                    await self.tick(box: box)
+                }
+            }
+            defer { group.cancelAll() }
+            try await group.next()
         }
         await poller.stop()
+    }
+
+    func tick(box: SecretBox?) async {
+        do { try await reload(box: box) } catch { logger.error("reload failed: \(HubError.describe(error))") }
+        await pulse()
     }
 
     /// Re-reads servers and sites; the poller gets them only when they changed.

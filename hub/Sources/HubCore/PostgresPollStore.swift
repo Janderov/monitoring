@@ -363,6 +363,9 @@ public actor PostgresPollStore: PollStore {
         if let prunedAt, now.timeIntervalSince(prunedAt) < Self.pruneEvery, now >= prunedAt { return }
         let changed = try await Partitions.ensure(db, now: now)
         if !changed.isEmpty { logger.info("partitions: \(changed.joined(separator: ", "))") }
+        // Tables without partitions are trimmed by age (db-schema.md).
+        try await db.query("DELETE FROM sys.job_run WHERE started_at < \(now.addingTimeInterval(-7 * 86_400))")
+        try await db.query("DELETE FROM ntf.delivery WHERE queued_at < \(now.addingTimeInterval(-365 * 86_400))")
         prunedAt = now
     }
 
