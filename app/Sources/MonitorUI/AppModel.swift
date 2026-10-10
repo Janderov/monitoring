@@ -21,6 +21,14 @@ public final class AppModel: ObservableObject {
     @Published public var selectedSiteID: String?
     /// Sidebar filter by group or tag; nil shows everything.
     @Published public var filter: Filter?
+    /// Clients and who owns which server, site and VPN key.
+    @Published public internal(set) var clientBook = ClientBook()
+    /// The sidebar's «Клиент»: every screen shows only this client's
+    /// objects; the map dims the rest. Nil shows all clients.
+    @Published public var clientScope: String?
+    @Published public var selectedClientID: String?
+    /// clients.json could not be read; the clients are then not shown.
+    @Published public internal(set) var clientsError: String?
     /// The add or edit form shown over the main window.
     @Published public var sheet: EditSheet?
     /// The map fills the screen: no sidebar, no toolbar, no panels.
@@ -118,7 +126,12 @@ public final class AppModel: ObservableObject {
                     self.heartbeat.roundDone(self)
                 }
             }, onSites: { [unowned self] list in
-                Task { @MainActor in self.siteStatuses = list }
+                Task { @MainActor in
+                    self.siteStatuses = list
+                    // Which server each site runs on: a client's site makes
+                    // the server shared with that client.
+                    self.siteHosts.refresh(sites: list.map(\.site), servers: self.statuses.map(\.server))
+                }
             }, onHealth: { [unowned self] h in
                 Task { @MainActor in self.health = h }
             })
@@ -144,6 +157,7 @@ public final class AppModel: ObservableObject {
             }
         }
         await reload()
+        await loadClients()
         Background.start(self)
         Task { await MorningDigest.checkLoop(self) }
     }
@@ -326,6 +340,7 @@ public final class AppModel: ObservableObject {
 
 public enum EditSheet: Identifiable, Hashable, Sendable {
     case addServer, editServer(String), reinstallAgent(String), updateAgents, addSite, editSite(String)
+    case addClient, editClient(String)
     /// Add server with the address already filled in (an unknown node on the map).
     case addServerAt(String)
     /// Server id and container name.
@@ -339,6 +354,8 @@ public enum EditSheet: Identifiable, Hashable, Sendable {
         case .updateAgents: return "update-agents"
         case .addSite: return "add-site"
         case .editSite(let id): return "site-\(id)"
+        case .addClient: return "add-client"
+        case .editClient(let id): return "client-\(id)"
         case .restartContainer(let id, let c): return "restart-\(id)-\(c)"
         case .rebootServer(let id): return "reboot-\(id)"
         }
@@ -346,7 +363,7 @@ public enum EditSheet: Identifiable, Hashable, Sendable {
 }
 
 public enum AppSection: Hashable, Sendable {
-    case overview, map, problems, servers, sites, vpn, journal, settings
+    case overview, map, problems, clients, servers, sites, vpn, journal, settings
 }
 
 public enum Filter: Hashable, Sendable {
@@ -361,11 +378,15 @@ public enum Filter: Hashable, Sendable {
 }
 
 extension AppModel {
-    /// Statuses after the sidebar filter.
-    public var visible: [ServerStatus] {
+    /// Statuses after the sidebar's group or tag filter, all clients: the
+    /// map dims other clients' servers instead of hiding them.
+    public var filtered: [ServerStatus] {
         guard let filter else { return statuses }
         return statuses.filter { filter.matches($0.server) }
     }
+
+    /// Statuses after the sidebar filter and the chosen client.
+    public var visible: [ServerStatus] { filtered.filter { inScope(server: $0.id) } }
 
     public var groups: [String] { Array(Set(statuses.compactMap(\.server.group))).sorted() }
     public var tags: [String] { Array(Set(statuses.flatMap { $0.server.tags ?? [] })).sorted() }

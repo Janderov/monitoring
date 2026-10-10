@@ -45,6 +45,11 @@ public protocol MonitorBackend: AnyObject, Sendable {
     func upsertSite(_ site: SiteConfig) async throws
     func removeSite(id: String) async throws
 
+    /// Clients and who owns which object (clients.json until the hub runs).
+    func loadClients() async throws -> ClientBook
+    /// Saves the whole book; `detail` goes to the action log.
+    func saveClients(_ book: ClientBook, detail: String) async throws
+
     /// False when this build has no agent files to upload; the form then
     /// offers only "the agent is already installed".
     var canInstallAgent: Bool { get }
@@ -98,6 +103,7 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
     public private(set) var adminLock: AdminLock?
     private let secrets: SecretStore
     private let config: ConfigRepository
+    private let clients = ClientsRepository()
 
     public init(notify: @escaping @Sendable ([AlertEvent]) -> Void, secrets: SecretStore = KeychainSecrets()) {
         self.notify = notify
@@ -153,13 +159,17 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
         defer { try? FileManager.default.removeItem(at: tmp) }
         guard let store else { throw Transfer.Error("база данных не открыта") }
         try await store.copy(to: tmp)
-        let contents = try await config.exportContents()
+        var contents = try await config.exportContents()
+        contents.clients = try? Data(contentsOf: clients.url)
         return try Transfer.seal(contents, database: try Data(contentsOf: tmp), password: password)
     }
 
     public func importTransfer(_ data: Data, password: String) async throws -> ServersFile {
         let (contents, database) = try Transfer.open(data, password: password)
+        // Read before anything is replaced, so a broken file changes nothing.
+        let book = try contents.clients.map(ClientsRepository.decode)
         let file = try await config.importContents(contents)
+        if let book { try clients.save(book) }
         guard FileManager.default.createFile(atPath: DataFolder.pendingImport.path, contents: database,
                                              attributes: [.posixPermissions: 0o600]) else {
             throw Transfer.Error("не удалось сохранить историю из файла")
@@ -223,6 +233,16 @@ public final class LocalBackend: MonitorBackend, @unchecked Sendable {
         }
         try? await store?.forget(serverID: id)
         try await reload()
+    }
+
+    public func loadClients() async throws -> ClientBook {
+        try clients.load()
+    }
+
+    public func saveClients(_ book: ClientBook, detail: String) async throws {
+        _ = try await audited(.editConfig, on: .app, detail: detail) { [clients] in
+            try clients.save(book)
+        }
     }
 
     public func upsertSite(_ site: SiteConfig) async throws {

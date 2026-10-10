@@ -332,6 +332,8 @@ public enum DataFolder {
         return base.appendingPathComponent("Monitor", isDirectory: true)
     }
     public static var serversFile: URL { url.appendingPathComponent("servers.json") }
+    /// Clients and who owns which server, site and VPN key (ClientBook).
+    public static var clientsFile: URL { url.appendingPathComponent("clients.json") }
     public static var database: URL { url.appendingPathComponent("monitor.sqlite") }
     /// The build replaced by the last update and the database as it was then.
     public static var previousApp: URL { url.appendingPathComponent("Previous/Monitor.app", isDirectory: true) }

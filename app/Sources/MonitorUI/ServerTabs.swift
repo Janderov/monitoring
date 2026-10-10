@@ -495,6 +495,8 @@ struct EventsList: View {
         let q = search.trimmingCharacters(in: .whitespaces)
         return events.filter { e in
             guard object.isEmpty || e.serverID == object else { return false }
+            // The sidebar's client: only that client's objects in the journal.
+            guard serverID != nil || model.inScope(object: e.serverID) else { return false }
             switch filter {
             case .all: break
             case .critical: if e.kind == .info || e.severity != .critical { return false }

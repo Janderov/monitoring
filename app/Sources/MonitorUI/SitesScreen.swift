@@ -14,6 +14,7 @@ struct SitesTable: View {
             TableColumn("Сайт") { s in
                 HStack(spacing: 7) { StatusDot(level: s.level()); Text(s.name).lineLimit(1) }
             }
+            TableColumn("Клиент") { s in ClientTags(clients: model.ownerClients(site: s.id)) }.width(min: 60, ideal: 90)
             TableColumn("Код") { s in Text(s.statusCode.map(String.init) ?? "—").monospacedDigit() }.width(min: 40, ideal: 50)
             TableColumn("Ответ, среднее") { s in Text(s.averageLatency.map(Fmt.ms) ?? "—").monospacedDigit() }
             TableColumn("Откуда проверяется") { s in
@@ -57,7 +58,7 @@ struct SitesScreen: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        let sites = model.sites
+        let sites = model.scopedSites
         HSplitView {
             SitesTable(model: model, sites: sites, selection: $model.selectedSiteID)
                 .frame(minWidth: 320, idealWidth: 420, maxWidth: 560)
