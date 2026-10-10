@@ -45,6 +45,14 @@ if [ ! -e "$SECRETS/heartbeat-url" ]; then
   fi
   printf '%s\n' "$url" > "$SECRETS/heartbeat-url"
 fi
+if [ ! -e "$SECRETS/telegram-bot-token" ]; then
+  token=""
+  if [ -t 0 ] || [ -e /dev/tty ]; then
+    read -r -s -p "Токен Telegram-бота от @BotFather (ввод не виден), Enter — пропустить: " token </dev/tty || true
+    echo
+  fi
+  printf '%s\n' "$token" > "$SECRETS/telegram-bot-token"
+fi
 chown -R 10001 "$SECRETS" "$DIR/import"
 chmod 600 "$SECRETS"/*
 # The compose file looks for ./secrets, ./backups and ./import next to it.

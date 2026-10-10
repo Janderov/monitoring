@@ -16,6 +16,7 @@ public actor PostgresPollStore: PollStore {
     var serverIDs: [String: UUID] = [:]
     var siteIDs: [String: UUID] = [:]
     private var prunedAt: Date?
+
     public static let pruneEvery: TimeInterval = 3600
 
     public init(db: Database) { self.db = db }
@@ -267,6 +268,18 @@ public actor PostgresPollStore: PollStore {
                 VALUES (\(e.time), \(type), \(id), \(e.kind.rawValue), \(e.key), \(severity), \(e.message), \(incident),
                         \(UUID(uuidString: actor)))
                 """, logger: logger)
+            // Telegram messages for it, in the same transaction. A mistake
+            // there must not lose the journal line or the incident.
+            if let incident {
+                try await conn.query("SAVEPOINT notify", logger: logger)
+                do {
+                    try await NotifyQueue.enqueue(conn, kind: e.kind, incidentID: incident, now: e.time, logger: logger)
+                    try await conn.query("RELEASE SAVEPOINT notify", logger: logger)
+                } catch {
+                    logger.error("telegram queue: \(HubError.describe(error))")
+                    try await conn.query("ROLLBACK TO SAVEPOINT notify", logger: logger)
+                }
+            }
         }
     }
 

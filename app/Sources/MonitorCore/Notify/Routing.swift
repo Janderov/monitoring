@@ -63,6 +63,12 @@ extension Notify {
         public var dedupKey: String
         public var decision: NotifyDecision
         public var message: TelegramMessage
+
+        public init(accountID: String, chatID: Int64, kind: NotifyKind, incidentIDs: [String], dedupKey: String,
+                    decision: NotifyDecision, message: TelegramMessage) {
+            self.accountID = accountID; self.chatID = chatID; self.kind = kind; self.incidentIDs = incidentIDs
+            self.dedupKey = dedupKey; self.decision = decision; self.message = message
+        }
     }
 
     /// The messages one alert event turns into, one per person who should know.

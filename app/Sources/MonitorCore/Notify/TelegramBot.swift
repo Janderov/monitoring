@@ -104,10 +104,15 @@ public struct TelegramOutgoing: Equatable, Sendable {
     /// Edit this message instead of sending a new one.
     public var edit: Int64?
     public var attempts: Int
+    /// A new alert that may join others of the same client into one message
+    /// (`Notify.bundle`): the client's id, and the problem itself.
+    public var bundle: String?
+    public var incident: NotifyIncident?
     public init(deliveryID: String, chatID: Int64, message: TelegramMessage, replyTo: Int64? = nil,
-                edit: Int64? = nil, attempts: Int = 0) {
+                edit: Int64? = nil, attempts: Int = 0, bundle: String? = nil, incident: NotifyIncident? = nil) {
         self.deliveryID = deliveryID; self.chatID = chatID; self.message = message
         self.replyTo = replyTo; self.edit = edit; self.attempts = attempts
+        self.bundle = bundle; self.incident = incident
     }
 }
 
@@ -274,45 +279,70 @@ public actor TelegramBot {
     }
 
     /// Sends what is due in ntf.delivery, one message a second per chat at most.
-    /// Returns how many went out.
+    /// Three or more new alerts of one client for one chat go as one list.
+    /// Returns how many messages went out.
     @discardableResult
     public func flush(limit: Int = 50) async throws -> Int {
         let now = clock()
         var count = 0
-        for o in try await store.due(now: now, limit: limit) {
+        for group in Self.groups(try await store.due(now: now, limit: limit)) {
+            let o = group[0]
             if let last = lastToChat[o.chatID], now.timeIntervalSince(last) < Self.perChatGap {
                 continue  // still queued: the next flush takes it
             }
             lastToChat[o.chatID] = now
+            let message = group.count > 1 ? TelegramText.bundle(group.compactMap(\.incident)) : o.message
             do {
                 var id: Int64? = o.edit
                 if let e = o.edit {
-                    try await api.edit(o.chatID, message: e, o.message)
+                    try await api.edit(o.chatID, message: e, message)
                 } else {
-                    id = try await api.send(o.chatID, o.message, replyTo: o.replyTo)
+                    id = try await api.send(o.chatID, message, replyTo: o.replyTo)
                 }
-                try await store.sent(deliveryID: o.deliveryID, messageID: id, now: now)
+                for m in group { try await store.sent(deliveryID: m.deliveryID, messageID: id, now: now) }
                 count += 1
             } catch let e as TelegramError {
-                switch e {
-                case .blocked:
-                    try await store.markBlocked(chatID: o.chatID)
-                    try await store.failed(deliveryID: o.deliveryID, error: e.description, retryAt: nil)
-                case .retryAfter(let s):
-                    try await store.failed(deliveryID: o.deliveryID, error: e.description,
-                                           retryAt: now.addingTimeInterval(TimeInterval(s)))
-                case .badToken:
-                    // Every message would fail the same way: leave them queued.
-                    try await store.failed(deliveryID: o.deliveryID, error: e.description,
-                                           retryAt: now.addingTimeInterval(300))
-                    throw e
-                default:
-                    try await store.failed(deliveryID: o.deliveryID, error: e.description,
-                                           retryAt: Self.retry(attempts: o.attempts + 1, now: now))
-                }
+                for m in group { try await failed(m, e, now: now) }
+                if e == .badToken { throw e }
             }
         }
         return count
+    }
+
+    func failed(_ o: TelegramOutgoing, _ e: TelegramError, now: Date) async throws {
+        switch e {
+        case .blocked:
+            try await store.markBlocked(chatID: o.chatID)
+            try await store.failed(deliveryID: o.deliveryID, error: e.description, retryAt: nil)
+        case .retryAfter(let s):
+            try await store.failed(deliveryID: o.deliveryID, error: e.description,
+                                   retryAt: now.addingTimeInterval(TimeInterval(s)))
+        case .badToken:
+            // Every message would fail the same way: keep them queued.
+            try await store.failed(deliveryID: o.deliveryID, error: e.description, retryAt: now.addingTimeInterval(300))
+        default:
+            try await store.failed(deliveryID: o.deliveryID, error: e.description,
+                                   retryAt: Self.retry(attempts: o.attempts + 1, now: now))
+        }
+    }
+
+    /// Due messages in order, with bundles of one client for one chat put together.
+    static func groups(_ due: [TelegramOutgoing]) -> [[TelegramOutgoing]] {
+        var bundles: [String: [TelegramOutgoing]] = [:]
+        for o in due where o.bundle != nil && o.incident != nil { bundles["\(o.chatID)|\(o.bundle!)", default: []].append(o) }
+        var taken = Set<String>()
+        var out: [[TelegramOutgoing]] = []
+        for o in due {
+            guard let b = o.bundle, o.incident != nil else { out.append([o]); continue }
+            let k = "\(o.chatID)|\(b)"
+            let g = bundles[k] ?? [o]
+            if g.count < Notify.bundleMin { out.append([o]); continue }
+            if taken.insert(k).inserted {
+                let incidents = Notify.bundle(g.compactMap(\.incident))[0].map(\.id)
+                out.append(incidents.compactMap { id in g.first { $0.incident?.id == id } })
+            }
+        }
+        return out
     }
 
     /// 10 s, 20 s, 40 s … up to 10 min; nil after `maxAttempts`.

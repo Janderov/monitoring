@@ -70,6 +70,9 @@ public actor Hub {
         try await reload(box: box)
         await poller.start()
         logger.info("hub started: \(inventory.servers.count) servers, \(inventory.sites.count) sites")
+        let telegram = config.telegramToken.map { token in Task { await self.telegram(token) } }
+        if telegram == nil { logger.notice("нет токена бота \(HubConfig.credentialNames.telegram): Telegram выключен") }
+        defer { telegram?.cancel() }
 
         while !Task.isCancelled {
             try await Task.sleep(nanoseconds: UInt64(Self.reloadEvery * 1_000_000_000))
@@ -123,6 +126,53 @@ public actor Hub {
     func log(_ events: [AlertEvent]) {
         for e in events where e.kind != .info {
             logger.notice("\(e.kind.rawValue): \(e.serverName): \(e.message)")
+        }
+    }
+
+    /// The Telegram bot: answers people (long polling, no open ports), sends
+    /// the queue every two seconds, and once a minute queues escalations and
+    /// the morning «Прогноз».
+    func telegram(_ token: String) async {
+        let store = PostgresTelegramStore(db: db)
+        let api = TelegramBotAPI(transport: URLSessionTelegram(token: token))
+        let bot = TelegramBot(api: api, store: store)
+        let logger = self.logger
+        let db = self.db
+        do {
+            let name = try await api.me()
+            try await store.setUsername(name)
+            logger.info("telegram: бот @\(name)")
+        } catch {
+            logger.error("telegram: \(HubError.describe(error))")
+        }
+        func pause(_ error: Error) async {
+            logger.warning("telegram: \(HubError.describe(error))")
+            let wait: UInt64 = (error as? TelegramError) == .badToken ? 300 : 5
+            try? await Task.sleep(nanoseconds: wait * 1_000_000_000)
+        }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                while !Task.isCancelled {
+                    do { try await bot.poll() } catch { await pause(error) }
+                }
+            }
+            group.addTask {
+                while !Task.isCancelled {
+                    do { try await bot.flush() } catch { await pause(error) }
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+            }
+            group.addTask {
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 60_000_000_000)
+                    do {
+                        try await NotifyQueue.escalate(db, now: Date())
+                        try await NotifyQueue.digests(db, now: Date())
+                    } catch {
+                        logger.error("telegram jobs: \(HubError.describe(error))")
+                    }
+                }
+            }
         }
     }
 

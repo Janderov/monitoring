@@ -6,6 +6,7 @@
 #   secret-key     encryption key for agent tokens in the database
 #   db-password    PostgreSQL password
 #   heartbeat-url  healthchecks.io ping address (empty file = no pulse)
+#   telegram-bot-token  the bot's token from @BotFather (empty file = no Telegram)
 name: monitor-hub
 
 services:
@@ -41,7 +42,7 @@ services:
       PGDATABASE: monitor
       HUB_NAME: ${HUB_NAME:-Хаб}
       TZ: Europe/Moscow
-    secrets: [secret-key, db-password, heartbeat-url]
+    secrets: [secret-key, db-password, heartbeat-url, telegram-bot-token]
     volumes:
       - ./import:/import:ro
 
@@ -78,6 +79,8 @@ secrets:
     file: ./secrets/db-password
   heartbeat-url:
     file: ./secrets/heartbeat-url
+  telegram-bot-token:
+    file: ./secrets/telegram-bot-token
 
 volumes:
   pgdata:

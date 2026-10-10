@@ -9,7 +9,7 @@ import Foundation
 public enum Notify {}
 
 /// An open or just-closed problem: a row of ops.incident.
-public struct NotifyIncident: Equatable, Sendable {
+public struct NotifyIncident: Equatable, Codable, Sendable {
     public var id: String
     public var objectType: String        // server, site, vpn_key, domain, hub
     public var objectID: String?
