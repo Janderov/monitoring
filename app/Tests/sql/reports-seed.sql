@@ -1,5 +1,6 @@
 -- Sample rows for checking ReportSQL against the real schema. Documentation names only.
-INSERT INTO sys.org_settings (company_name, report_footer, contact_email) VALUES ('Михаил Дмитраков', 'Связь: Telegram', 'admin@example.com');
+INSERT INTO sys.org_settings (company_name, report_footer, contact_email) VALUES ('Михаил Дмитраков', 'Связь: Telegram', 'admin@example.com')
+    ON CONFLICT (id) DO UPDATE SET company_name = EXCLUDED.company_name, report_footer = EXCLUDED.report_footer, contact_email = EXCLUDED.contact_email;
 INSERT INTO sys.secret (id, kind, ciphertext, nonce, key_version) VALUES ('00000000-0000-0000-0000-0000000000a1', 'agent_token', '\x00', '\x00', 1);
 INSERT INTO inv.client (id, name, timezone) VALUES ('00000000-0000-0000-0000-00000000c001', 'ООО «Пример»', 'Europe/Moscow'),
                                                     ('00000000-0000-0000-0000-00000000c002', 'Своё', 'Europe/Moscow');
