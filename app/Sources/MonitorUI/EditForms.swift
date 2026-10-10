@@ -56,7 +56,7 @@ private struct Missing: View {
 
 /// Bottom row of every form: destructive action on the left, cancel and the
 /// main action on the right, as in System Settings sheets.
-private struct FormButtons<Leading: View>: View {
+struct FormButtons<Leading: View>: View {
     var primary: String
     var enabled: Bool
     var busy: Bool
