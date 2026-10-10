@@ -25,7 +25,11 @@ let package = Package(
         // The menu bar app (macOS only; the sources are empty elsewhere).
         // SwiftUI views and the observable app model (macOS only; empty on Linux).
         .target(name: "MonitorUI", dependencies: ["MonitorCore"]),
+        // Monthly client reports: builds the snapshot from the hub's database
+        // rows, renders the page and PDF source, link tokens. No UI, no driver.
+        .target(name: "MonitorReports", dependencies: ["MonitorCore"]),
         .executableTarget(name: "Monitor", dependencies: ["MonitorCore", "MonitorUI"]),
         .testTarget(name: "MonitorCoreTests", dependencies: ["MonitorCore"]),
+        .testTarget(name: "MonitorReportsTests", dependencies: ["MonitorReports"]),
     ]
 )
