@@ -25,9 +25,11 @@ public enum Transfer {
         public var servers: Data
         /// Secret store accounts (SecretKey) and their values.
         public var secrets: [String: String]
+        /// clients.json; nil in files made before clients existed.
+        public var clients: Data?
 
-        public init(created: Date, servers: Data, secrets: [String: String]) {
-            self.created = created; self.servers = servers; self.secrets = secrets
+        public init(created: Date, servers: Data, secrets: [String: String], clients: Data? = nil) {
+            self.created = created; self.servers = servers; self.secrets = secrets; self.clients = clients
         }
     }
 

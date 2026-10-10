@@ -42,6 +42,7 @@ public struct MainWindow: View {
                         Menu {
                             Button("Сервер…") { model.present(.addServer) }
                             Button("Сайт…") { model.present(.addSite) }
+                            Button("Клиента…") { model.present(.addClient) }
                             Divider()
                             Button("Открыть servers.json") { model.openConfig() }
                             Button("Перечитать servers.json") { Task { await model.reload() } }
@@ -71,6 +72,7 @@ public struct MainWindow: View {
         case .overview: OverviewView(model: model)
         case .map: MapScreen(model: model)
         case .problems: ProblemsView(model: model)
+        case .clients: ClientsScreen(model: model)
         case .servers: ServersScreen(model: model)
         case .sites: SitesScreen(model: model)
         case .vpn: VPNScreen(model: model)
@@ -88,9 +90,10 @@ private struct Sidebar: View {
             Section {
                 row(.overview, "Обзор", "square.grid.2x2")
                 row(.map, "Карта", "map")
-                row(.problems, "Проблемы", "exclamationmark.triangle", badge: model.problems.count)
-                row(.servers, "Серверы", "server.rack", count: model.statuses.count)
-                row(.sites, "Сайты", "globe", count: model.sites.count)
+                row(.problems, "Проблемы", "exclamationmark.triangle", badge: model.scopedProblems.count)
+                row(.clients, "Клиенты", "person.2", count: model.clientBook.current.count)
+                row(.servers, "Серверы", "server.rack", count: model.scopedStatuses.count)
+                row(.sites, "Сайты", "globe", count: model.scopedSites.count)
                 row(.vpn, "VPN", "lock.shield", count: vpnClients)
                 row(.journal, "Журнал", "list.bullet.rectangle")
             }
@@ -101,7 +104,7 @@ private struct Sidebar: View {
                 Section("Группы") {
                     ForEach(model.groups, id: \.self) { g in
                         Label(g, systemImage: "folder")
-                            .badge(model.statuses.filter { $0.server.group == g }.count)
+                            .badge(model.scopedStatuses.filter { $0.server.group == g }.count)
                             .tag(SidebarTag.filter(.group(g)))
                     }
                 }
@@ -115,10 +118,13 @@ private struct Sidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            ClientScopePicker(model: model)
+        }
     }
 
     private var vpnClients: Int {
-        model.statuses.reduce(0) { sum, s in sum + (s.snapshot?.vpn?.reduce(0) { $0 + $1.clients } ?? 0) }
+        model.scopedStatuses.reduce(0) { sum, s in sum + (s.snapshot?.vpn?.reduce(0) { $0 + $1.clients } ?? 0) }
     }
 
     private func row(_ s: AppSection, _ title: String, _ icon: String, badge alerts: Int = 0, count: Int = 0) -> some View {
@@ -173,6 +179,8 @@ public struct MonitorCommands: Commands {
             Button("Сайты") { go(.sites) }.keyboardShortcut("5")
             Button("VPN") { go(.vpn) }.keyboardShortcut("6")
             Button("Журнал") { go(.journal) }.keyboardShortcut("7")
+            Button("Клиенты") { go(.clients) }.keyboardShortcut("8")
+            Button("Все клиенты") { model.clientScope = nil }.keyboardShortcut("0", modifiers: [.command, .option])
             Divider()
             Button("Опросить сейчас") { Task { await model.pollNow() } }.keyboardShortcut("r")
             if model.admin?.state == .unlocked {

@@ -28,22 +28,22 @@ struct OverviewView: View {
     }
 
     private var summary: some View {
-        let crit = model.problems.filter { $0.alert.severity == .critical }.count
-        let down = model.statuses.filter { $0.alerts.contains { $0.key == "down" } }.count
-        let vpnOnline = model.statuses.reduce(0) { $0 + ($1.snapshot?.vpnActiveClients ?? 0) }
-        let vpnTotal = model.statuses.reduce(0) { s, st in s + (st.snapshot?.vpn?.reduce(0) { $0 + $1.clients } ?? 0) }
-        let sites = model.sites
+        let crit = model.scopedProblems.filter { $0.alert.severity == .critical }.count
+        let down = model.scopedStatuses.filter { $0.alerts.contains { $0.key == "down" } }.count
+        let vpnOnline = model.scopedStatuses.reduce(0) { $0 + ($1.snapshot?.vpnActiveClients ?? 0) }
+        let vpnTotal = model.scopedStatuses.reduce(0) { s, st in s + (st.snapshot?.vpn?.reduce(0) { $0 + $1.clients } ?? 0) }
+        let sites = model.scopedSites
         return GroupBox {
             Grid(alignment: .leading, horizontalSpacing: 0) {
                 GridRow {
-                    stat("Серверы", "\(model.statuses.count)", down > 0 ? "\(down) не отвечает" : "все отвечают", down > 0)
+                    stat("Серверы", "\(model.scopedStatuses.count)", down > 0 ? "\(down) не отвечает" : "все отвечают", down > 0)
                     stat("Сайты", "\(sites.count)",
                          sites.contains { $0.level() == .critical } ? "есть недоступные" : "все отвечают",
                          sites.contains { $0.level() == .critical })
                     stat("VPN-клиенты онлайн", "\(vpnOnline)", vpnTotal > 0 ? "из \(vpnTotal)" : "нет данных", false)
-                    stat("Активные проблемы", "\(model.problems.count)",
-                         crit > 0 ? "\(crit) критичных" : (model.problems.isEmpty ? "нет" : "только предупреждения"), crit > 0)
-                    if let cost = Money.total(model.statuses.map(\.server)) {
+                    stat("Активные проблемы", "\(model.scopedProblems.count)",
+                         crit > 0 ? "\(crit) критичных" : (model.scopedProblems.isEmpty ? "нет" : "только предупреждения"), crit > 0)
+                    if let cost = Money.total(model.scopedStatuses.map(\.server)) {
                         stat("Серверы в месяц", cost, "по указанным ценам", false)
                     }
                 }
@@ -64,11 +64,11 @@ struct OverviewView: View {
     private var problems: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Активные проблемы").font(.headline)
-            if model.problems.isEmpty {
+            if model.scopedProblems.isEmpty {
                 Text("Проблем нет").foregroundStyle(.secondary)
             } else {
                 ProblemsTable(model: model)
-                    .fitRows(model.problems.count, max: 8)
+                    .fitRows(model.scopedProblems.count, max: 8)
             }
         }
     }
@@ -110,7 +110,7 @@ struct OverviewView: View {
 
     private func aheadRows(now: Date) -> [AheadRow] {
         var out: [AheadRow] = []
-        for s in model.statuses {
+        for s in model.scopedStatuses {
             for i in model.soon.items(for: s.id, model: model) where Soon.urgent(i, now: now) {
                 out.append(AheadRow(id: s.id + "|" + i.id, serverID: s.id, serverName: s.server.name,
                                     text: SoonSection.title(i), when: Self.inDays(i.date)))
@@ -133,7 +133,7 @@ struct OverviewView: View {
                 Text("Серверы").font(.headline)
                 Text("CPU за последний час").font(.caption).foregroundStyle(.secondary)
             }
-            Table(model.statuses) {
+            Table(model.scopedStatuses) {
                 TableColumn("Имя") { s in
                     HStack(spacing: 7) { StatusDot(level: s.level); Text(s.server.name) }
                 }
@@ -153,7 +153,7 @@ struct OverviewView: View {
                 TableColumn("Аптайм") { s in num(s.snapshot.map { Fmt.duration($0.uptimeSeconds) }) }
                     .width(min: 70, ideal: 90)
             }
-            .fitRows(model.statuses.count, max: 12)
+            .fitRows(model.scopedStatuses.count, max: 12)
             .contextMenu(forSelectionType: String.self) { _ in } primaryAction: { ids in
                 if let id = ids.first { model.show(server: id) }
             }
@@ -161,7 +161,7 @@ struct OverviewView: View {
     }
 
     @ViewBuilder private var sites: some View {
-        let sites = model.sites
+        let sites = model.scopedSites
         if !sites.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
@@ -207,7 +207,7 @@ struct ProblemsTable: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        Table(model.problems) {
+        Table(model.scopedProblems) {
             TableColumn("Важность") { p in
                 HStack(spacing: 6) {
                     StatusDot(level: p.alert.severity.level)
@@ -217,13 +217,14 @@ struct ProblemsTable: View {
             }
             .width(min: 100, ideal: 110)
             TableColumn("Объект") { p in Text(p.name) }.width(min: 80, ideal: 120)
+            TableColumn("Клиент") { p in ClientTags(clients: model.ownerClients(p)) }.width(min: 60, ideal: 100)
             TableColumn("Что случилось") { p in Text(p.alert.message) }
             TableColumn("Началось") { p in Text(Fmt.time(p.alert.since)).foregroundStyle(.secondary).monospacedDigit() }
                 .width(min: 70, ideal: 90)
             TableColumn("Длится") { p in Text(Fmt.since(p.alert.since)).monospacedDigit() }.width(min: 70, ideal: 90)
         }
         .contextMenu(forSelectionType: String.self) { ids in
-            if let id = ids.first, let p = model.problems.first(where: { $0.id == id }) {
+            if let id = ids.first, let p = model.scopedProblems.first(where: { $0.id == id }) {
                 if let server = p.server {
                     ServerContextMenu(model: model, server: server)
                     Button("Открыть сервер") { model.show(p) }
@@ -232,7 +233,7 @@ struct ProblemsTable: View {
                 }
             }
         } primaryAction: { ids in
-            if let id = ids.first, let p = model.problems.first(where: { $0.id == id }) { model.show(p) }
+            if let id = ids.first, let p = model.scopedProblems.first(where: { $0.id == id }) { model.show(p) }
         }
     }
 }
@@ -242,14 +243,14 @@ struct ProblemsView: View {
 
     var body: some View {
         Group {
-            if model.problems.isEmpty {
-                EmptyNote(title: "Проблем нет", detail: model.statuses.isEmpty ? nil : "Все серверы и сайты в норме")
+            if model.scopedProblems.isEmpty {
+                EmptyNote(title: "Проблем нет", detail: model.scopedStatuses.isEmpty ? nil : "Все серверы и сайты в норме")
             } else {
                 ProblemsTable(model: model)
             }
         }
         .navigationTitle("Проблемы")
-        .navigationSubtitle("\(model.problems.count)")
+        .navigationSubtitle("\(model.scopedProblems.count)")
     }
 }
 
