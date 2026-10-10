@@ -27,7 +27,8 @@ func fail(_ message: String) -> Never {
 do {
     switch args.first ?? "run" {
     case "run":
-        try await Hub(config: try HubConfig.fromEnvironment(), logger: logger).run()
+        let config = try HubConfig.fromEnvironment()
+        try await Hub(config: config, logger: logger, services: [TelegramService(config: config)]).run()
     case "migrate":
         let hub = Hub(config: try HubConfig.fromEnvironment(), logger: logger)
         try await hub.withDatabase { _ in () }

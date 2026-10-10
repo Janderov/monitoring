@@ -11,10 +11,6 @@ public enum TelegramLink {
     }
 
     public static func make(_ db: Database, login: String?, now: Date = Date()) async throws -> String {
-        guard let bot = try await db.scalar("SELECT value #>> '{}' FROM sys.kv WHERE key = \(PostgresTelegramStore.usernameKey)",
-                                            as: String.self), !bot.isEmpty else {
-            throw Failure(description: "хаб ещё не знает имя бота: положите токен в secrets/telegram-bot-token и перезапустите хаб")
-        }
         let account: UUID
         if let login {
             guard let a = try await db.scalar("SELECT id FROM acc.account WHERE login = \(login) AND status = 'active'",
@@ -31,8 +27,7 @@ public enum TelegramLink {
                 RETURNING id
                 """, as: UUID.self)!
         }
-        let code = try await PostgresTelegramStore.newCode(db, account: account, now: now)
-        guard let url = LinkCode.link(bot: bot, code: code) else { throw Failure(description: "не получилось собрать ссылку") }
+        let url = try await TelegramSettings.link(db, account: account, now: now).url
         return """
             Откройте на телефоне в течение 10 минут и нажмите «Старт»:
             \(url.absoluteString)

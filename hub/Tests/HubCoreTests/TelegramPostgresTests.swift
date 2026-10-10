@@ -179,6 +179,29 @@ final class TelegramPostgresTests: XCTestCase {
         let offset = try await tg.offset()
         XCTAssertEqual(offset, 42)
 
+        // The cabinet: the token is checked with Telegram and sealed; status and link.
+        let box = try SecretBox(key: Data(repeating: 7, count: 32))
+        do {
+            _ = try await TelegramSettings.setToken(db, box: box, token: "not a token", transport: HubFakeTelegram())
+            XCTFail("a malformed token is refused")
+        } catch {}
+        let tgFake = HubFakeTelegram()
+        await tgFake.answer(#"{"ok":true,"result":{"id":1,"is_bot":true,"username":"alfa_monitor_bot"}}"#)
+        let token = "123456789:" + String(repeating: "A", count: 35)
+        let username = try await TelegramSettings.setToken(db, box: box, token: token, transport: tgFake)
+        XCTAssertEqual(username, "alfa_monitor_bot")
+        let stored = try await TelegramSettings.storedToken(db, box: box)
+        XCTAssertEqual(stored, token)
+        let plain = try await db.scalar("SELECT count(*) FROM sys.secret WHERE position(\(Data(token.utf8)) in ciphertext) > 0", as: Int64.self)
+        XCTAssertEqual(plain, 0, "never stored in the clear")
+        let st = try await TelegramSettings.status(db, account: ivan)
+        XCTAssertEqual(st, TelegramSettings.Status(configured: true, username: "alfa_monitor_bot", linked: true, chat: "@ivan", blocked: false))
+        let link = try await TelegramSettings.link(db, account: ivan, now: now)
+        XCTAssertTrue(link.url.absoluteString.hasPrefix("https://t.me/alfa_monitor_bot?start="))
+        try await TelegramSettings.unlink(db, account: ivan)
+        let unlinked = try await TelegramSettings.status(db, account: ivan)
+        XCTAssertFalse(unlinked.linked)
+
         // /stop unlinks.
         try await tg.unlink(chatID: 300, now: now)
         let gone = try await tg.account(chatID: 300)

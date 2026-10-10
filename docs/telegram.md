@@ -11,7 +11,7 @@
 - Уведомления Mac остаются вторым каналом, когда приложение запущено.
 
 ## 2. Бот
-- Один бот на всю установку. Михаил создаёт его в @BotFather и кладёт токен на сервер хаба командой `hub/deploy/telegram.sh token` (файл `secrets/telegram-bot-token`, права 600). Так он не попадает ни в базу, ни в веб-кабинет, и угон кабинета не даёт токен.
+- Один бот на всю установку. Михаил создаёт его в @BotFather и вставляет токен в кабинете генерального админа (поле «Токен бота», с подтверждением кодом) или на сервере командой `hub/deploy/telegram.sh token`. Хаб проверяет токен у Telegram и хранит его зашифрованным в sys.secret (тем же ключом, что токены агентов) либо в файле `secrets/telegram-bot-token`; обратно токен не показывается. Новый токен хаб подхватывает за минуту.
 - Бот отвечает только привязанным людям. Остальным: «Этот бот закрытый».
 
 ## 3. Привязка Telegram к кабинету
@@ -75,7 +75,7 @@
 Хаб — `hub/Sources/HubCore` (тест TelegramPostgresTests на настоящем PostgreSQL 18):
 - `NotifyQueue.swift`: в той же транзакции, что и ops.incident (PostgresPollStore.addEvent), пишет строки ntf.delivery. Новые тревоги ждут 15 с, чтобы тревоги одного раунда ушли одним списком. «Решено» — только тем, кому писали о проблеме: ответом на первое сообщение и правкой первого. Раз в минуту: эскалация и утренний прогноз (ops.forecast + то, что отложено в тихие часы).
 - `PostgresTelegramStore.swift`: TelegramStore на таблицах ntf.*, ops.incident_ack, sys.kv; права через acc.permission_mode (alerts_receive, alerts_ack).
-- `Hub.swift`: при наличии токена — цикл бота (long polling), отправка очереди раз в 2 с, задачи раз в минуту.
+- `TelegramService.swift`: сервис хаба (HubService): цикл бота (long polling), отправка очереди раз в 2 с, задачи раз в минуту; `TelegramSettings` — status / setToken / link / unlink для кабинета.
 - `monitor-hub telegram-link [логин]` и `deploy/telegram.sh`: токен и ссылка привязки до появления кабинетов.
 
-Для кабинета (тред «Кабинеты админов и права»): кнопка «Подключить Telegram» вызывает `PostgresTelegramStore.newCode(db, account:)` и показывает `LinkCode.link(bot:code:)` как QR; имя бота — `sys.kv['telegram.bot']`. Настройки «Уведомления» пишут ntf.prefs.
+Для кабинета (тред «Кабинеты админов и права»): HTTP и права в HubWeb, внутри вызываются `TelegramSettings.status/setToken/link/unlink`. Настройки «Уведомления» пишут ntf.prefs.
