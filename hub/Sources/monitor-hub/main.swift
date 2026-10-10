@@ -8,6 +8,7 @@ import Logging
 // monitor-hub import FILE [NAME]   — take servers, sites and history from the
 //                                    Mac's transfer file; password on stdin
 // monitor-hub new-key              — a fresh encryption key for the credentials folder
+// monitor-hub report …             — monthly client reports (see `report help`)
 
 LoggingSystem.bootstrap { label in
     var h = StreamLogHandler.standardOutput(label: label)
@@ -45,10 +46,16 @@ do {
         print(report)
     case "new-key":
         print(SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }.base64EncodedString())
+    case "report":
+        let config = try HubConfig.fromEnvironment()
+        let out = try await Hub(config: config, logger: logger).withDatabase { db in
+            try await ReportCommand.run(Array(args.dropFirst()), db: db, config: config)
+        }
+        print(out)
     case "version", "--version":
         print(HubVersion.current)
     default:
-        fail("неизвестная команда \(args[0]); есть: run, migrate, import, new-key, version")
+        fail("неизвестная команда \(args[0]); есть: run, migrate, import, new-key, report, version")
     }
 } catch {
     fail("ошибка: \(HubError.describe(error))")

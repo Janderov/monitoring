@@ -75,6 +75,7 @@ final class LocalReportTests: XCTestCase {
         let input = LocalReport.input(client, book: book, source: source(), period: september)
         XCTAssertEqual(input.clientName, "ООО «Пример»")
         XCTAssertEqual(input.slaTarget, 0.995)
+        XCTAssertEqual(input.sites.map(\.current), [true, false])
         let r = ReportBuilder.build(input, now: generated)
 
         let shopRow = r.sites.first { $0.name == "shop.example.com" }!

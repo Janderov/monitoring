@@ -12,10 +12,11 @@ RUN cd hub && swift build -c release --product monitor-hub --static-swift-stdlib
 
 FROM swift:6.0-noble-slim
 RUN apt-get update -qq && apt-get install -y -qq libsqlite3-0 ca-certificates tzdata >/dev/null \
-    && rm -rf /var/lib/apt/lists/* && useradd --system --uid 10001 --home /opt/monitor-hub hub
+    && rm -rf /var/lib/apt/lists/* && useradd --system --uid 10001 --home /opt/monitor-hub hub \
+    && mkdir -p /var/lib/monitor-hub/files && chown hub /var/lib/monitor-hub/files
 COPY --from=build /monitor-hub /usr/local/bin/monitor-hub
 COPY db/migrations /opt/monitor-hub/migrations
-ENV HUB_MIGRATIONS=/opt/monitor-hub/migrations TZ=Europe/Moscow
+ENV HUB_MIGRATIONS=/opt/monitor-hub/migrations HUB_FILES=/var/lib/monitor-hub/files TZ=Europe/Moscow
 USER hub
 ENTRYPOINT ["/usr/local/bin/monitor-hub"]
 CMD ["run"]

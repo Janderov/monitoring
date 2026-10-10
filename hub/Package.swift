@@ -21,6 +21,7 @@ let package = Package(
     targets: [
         .target(name: "HubCore", dependencies: [
             .product(name: "MonitorCore", package: "app"),
+            .product(name: "MonitorReports", package: "app"),
             .product(name: "PostgresNIO", package: "postgres-nio"),
             .product(name: "NIOCore", package: "swift-nio"),
             .product(name: "NIOPosix", package: "swift-nio"),

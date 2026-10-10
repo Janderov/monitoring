@@ -8,13 +8,16 @@ import Foundation
 /// (date, client's zone), `$4` and `$5` the period as instants [from, to)
 /// (timestamptz). An object belongs to the report when it was the client's at
 /// any time in the period (`inv.client_asset.since/until`), so a site moved to
-/// another client mid-month still shows in both reports.
+/// another client mid-month still shows in both reports; `current` says
+/// whether it is still the client's at the end (only then does it get
+/// «Скоро потребует внимания» lines).
 /// Tested on PostgreSQL 18 with the schema and sample rows: Tests/sql/reports-check.sh.
 public enum ReportSQL {
     static let assets = """
     WITH a AS (
-      SELECT asset_type, asset_id FROM inv.client_asset
+      SELECT asset_type, asset_id, bool_or(until IS NULL OR until > $3) AS current FROM inv.client_asset
       WHERE client_id = $1 AND since <= $3 AND (until IS NULL OR until >= $2)
+      GROUP BY 1, 2
     )
     """
 
@@ -37,17 +40,18 @@ public enum ReportSQL {
     WHERE c.id = $1
     """
 
-    /// id, name, url, tls_expires_at, domain_expires_at.
+    /// id, name, url, tls_expires_at, domain_expires_at, current.
     public static let sites = assets + """
     , s AS (
-      SELECT s.id, s.name, s.url, lower(substring(s.url FROM '^[a-zA-Z]+://([^/:?#]+)')) AS host
+      SELECT s.id, s.name, s.url, lower(substring(s.url FROM '^[a-zA-Z]+://([^/:?#]+)')) AS host, a.current
       FROM inv.site s JOIN a ON a.asset_type = 'site' AND a.asset_id = s.id
     )
     SELECT s.id, s.name, s.url,
            (SELECT min(c.expires_at) FROM inv.certificate c WHERE c.host = s.host) AS tls_expires_at,
            (SELECT d.expires_at FROM inv.domain d
              WHERE s.host = d.name OR s.host LIKE '%.' || d.name
-             ORDER BY length(d.name) DESC LIMIT 1) AS domain_expires_at
+             ORDER BY length(d.name) DESC LIMIT 1) AS domain_expires_at,
+           s.current
     FROM s ORDER BY s.name
     """
 
@@ -58,9 +62,9 @@ public enum ReportSQL {
     WHERE d.day BETWEEN $2 AND $3
     """
 
-    /// id, name, role.
+    /// id, name, role, current.
     public static let servers = assets + """
-    SELECT s.id, s.name, s.role
+    SELECT s.id, s.name, s.role, a.current
     FROM inv.server s JOIN a ON a.asset_type = 'server' AND a.asset_id = s.id
     ORDER BY s.name
     """
@@ -136,7 +140,7 @@ public enum ReportSQL {
     )
     INSERT INTO rep.client_report (client_id, period_start, period_end, template_version, status,
                                    summary_status, data, admin_comment, generated_by, supersedes_id)
-    SELECT $1, $2, $3, $4, 'draft', $5, $6, coalesce((SELECT admin_comment FROM old LIMIT 1), ''), $7,
+    SELECT $1, $2, $3, $4, 'draft', $5, $6, coalesce((SELECT admin_comment FROM old LIMIT 1), ''), $7::uuid,
            (SELECT id FROM old LIMIT 1)
     RETURNING id
     """

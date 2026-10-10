@@ -124,14 +124,20 @@ public enum LocalReport {
                          dueAt: f.item.date, firstSeenAt: f.item.date, status: "open")
         }
 
+        // Still the client's when the month ends (the servers: their own, or hosting such a site).
+        let held = Set(book.assets.filter { $0.clientID == client.id && $0.since < p.to && ($0.until.map { $0 >= p.to } ?? true) }
+            .map(\.assetID))
+        let currentServers = held.union(sites.filter { held.contains($0.id) }.compactMap { s.hosting[$0.id] })
+
         let contract = client.contract(at: p.to.addingTimeInterval(-1))
         return ReportInput(
             clientName: client.legalName?.isEmpty == false ? client.legalName! : client.name,
             signature: s.signature, footer: s.footer, period: p,
             slaTarget: contract?.slaUptime.map { $0 / 100 },
-            sites: sites.map { .init(id: uuid($0.id), name: $0.name, tlsExpiry: s.tlsExpiry[$0.id], domainExpiry: s.domainExpiry[$0.id]) },
+            sites: sites.map { .init(id: uuid($0.id), name: $0.name, tlsExpiry: s.tlsExpiry[$0.id], domainExpiry: s.domainExpiry[$0.id],
+                                     current: held.contains($0.id)) },
             siteDays: siteDays,
-            servers: servers.map { .init(id: uuid($0.id), name: $0.name) },
+            servers: servers.map { .init(id: uuid($0.id), name: $0.name, current: currentServers.contains($0.id)) },
             serverDays: serverDays, diskDays: diskDays, incidents: incidents, forecasts: forecasts)
     }
 

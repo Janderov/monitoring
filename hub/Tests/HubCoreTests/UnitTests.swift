@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import XCTest
 @testable import HubCore
 
@@ -105,5 +106,36 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(PostgresPollStore.object("nl", servers: ["nl": u]).id, u)
         XCTAssertEqual(PostgresPollStore.object("site:shop", sites: ["shop": u]).type, "site")
         XCTAssertEqual(PostgresPollStore.object("away").type, "hub")
+    }
+}
+
+final class ReportWebTests: XCTestCase {
+    let web = ReportWeb(open: { _ in nil }, pdf: nil, logger: Logger(label: "test"))
+
+    func testOnlyReportLinksAndHealth() async {
+        let health = await web.respond(method: .GET, uri: "/healthz")
+        XCTAssertEqual(health.status, .ok)
+        for uri in ["/", "/r/", "/r/short", "/r/AAAAAAAAAAAAAAAAAAAAAA", "/r/AAAAAAAAAAAAAAAAAAAAAA/pdf",
+                    "/r/AAAAAAAAAAAAAAAAAAAAAA/x", "/r/../../etc/passwd", "/r/AAAAAAAAAAAAAAAAAAAA%2F"] {
+            let r = await web.respond(method: .GET, uri: uri)
+            XCTAssertEqual(r.status, .notFound, uri)
+        }
+        let post = await web.respond(method: .POST, uri: "/r/AAAAAAAAAAAAAAAAAAAAAA")
+        XCTAssertEqual(post.status, .methodNotAllowed)
+    }
+
+    func testListenAddress() throws {
+        XCTAssertEqual(try HubConfig.listen("8080")?.port, 8080)
+        XCTAssertEqual(try HubConfig.listen("8080")?.host, "0.0.0.0")
+        XCTAssertEqual(try HubConfig.listen("127.0.0.1:9000")?.host, "127.0.0.1")
+        XCTAssertNil(try HubConfig.listen(""))
+        XCTAssertThrowsError(try HubConfig.listen("localhost"))
+    }
+
+    func testPDFKeyChangesWithThePage() {
+        let id = UUID()
+        XCTAssertEqual(ReportPDF.key(id, html: "a"), ReportPDF.key(id, html: "a"))
+        XCTAssertNotEqual(ReportPDF.key(id, html: "a"), ReportPDF.key(id, html: "b"))
+        XCTAssertTrue(ReportPDF.key(id, html: "a").hasPrefix("reports/\(id.uuidString.lowercased())-"))
     }
 }

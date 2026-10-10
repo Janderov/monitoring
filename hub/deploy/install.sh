@@ -45,12 +45,27 @@ if [ ! -e "$SECRETS/heartbeat-url" ]; then
   fi
   printf '%s\n' "$url" > "$SECRETS/heartbeat-url"
 fi
+# Client report links (https://ДОМЕН/r/…): optional, asked once; an empty file = no links yet.
+if [ ! -e "$DIR/report-domain" ]; then
+  domain=""
+  if [ -t 0 ] || [ -e /dev/tty ]; then
+    read -r -p "Домен для ссылок на отчёты клиентам (например reports.example.com), Enter — позже: " domain </dev/tty || true
+  fi
+  printf '%s\n' "$domain" > "$DIR/report-domain"
+fi
+domain=$(tr -d '[:space:]' < "$DIR/report-domain")
+if [ -n "$domain" ]; then
+  printf 'COMPOSE_PROFILES=web\nHUB_DOMAIN=%s\nHUB_PUBLIC_URL=https://%s\n' "$domain" "$domain" > "$DIR/compose.env"
+else
+  : > "$DIR/compose.env"
+fi
 chown -R 10001 "$SECRETS" "$DIR/import"
 chmod 600 "$SECRETS"/*
 # The compose file looks for ./secrets, ./backups and ./import next to it.
 ln -sfn "$SECRETS" "$COMPOSE_DIR/secrets"
 ln -sfn "$DIR/backups" "$COMPOSE_DIR/backups"
 ln -sfn "$DIR/import" "$COMPOSE_DIR/import"
+ln -sfn "$DIR/compose.env" "$COMPOSE_DIR/.env"
 
 say "4/5 Собираю и запускаю (первый раз несколько минут)"
 cd "$COMPOSE_DIR"
@@ -70,6 +85,7 @@ cat <<MSG
   • Перенести серверы и историю с Mac:  $DIR/src/hub/deploy/import.sh ФАЙЛ.monitortransfer
   • Посмотреть, что делает хаб:          cd $COMPOSE_DIR && docker compose logs -f hub
   • Обновить хаб:                        запустите этот же скрипт ещё раз
+  • Отчёты клиентам:                     cd $COMPOSE_DIR && docker compose exec hub monitor-hub report help
 
 Сохраните копию $SECRETS/secret-key в надёжном месте: без него токены
 агентов в базе не расшифровать (их можно заново перенести с Mac).

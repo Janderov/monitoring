@@ -8,6 +8,8 @@ let package = Package(
         .executable(name: "Monitor", targets: ["Monitor"]),
         // The core alone, for the hub (hub/) that runs the same rounds on a server.
         .library(name: "MonitorCore", targets: ["MonitorCore"]),
+        // Client reports, for the hub's monthly job and the /r/<token> page.
+        .library(name: "MonitorReports", targets: ["MonitorReports"]),
     ],
     dependencies: [
         // CryptoKit's API on Linux, so the core (sealed passwords) tests in CI.

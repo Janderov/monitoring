@@ -304,7 +304,7 @@ public enum ReportPage {
             s += "@media (prefers-color-scheme: dark){:root{\(dark)}}"
             s += "body{padding:20px 16px}.sheet{border:1px solid var(--sep);border-radius:10px;padding:28px clamp(16px,4vw,36px)}"
         case .pdf:
-            s += "@page{size:A4;margin:14mm 12mm}body{background:#fff;padding:0}.sheet{padding:0;max-width:none}"
+            s += ":root{--bg:#fff}@page{size:A4;margin:14mm 12mm}body{padding:0}.sheet{padding:0;max-width:none}"
             s += "section,.row,tr{break-inside:avoid}"
         }
         s += common

@@ -161,7 +161,9 @@ public enum ReportBuilder {
     static func attention(_ input: ReportInput, now: Date) -> [ClientReport.Attention] {
         var out: [ClientReport.Attention] = []
         var covered = Set<String>()
-        for f in input.forecasts where f.status == "open" {
+        // Objects that went to another client during the month are not this client's business any more.
+        let gone = Set(input.sites.filter { !$0.current }.map(\.id) + input.servers.filter { !$0.current }.map(\.id))
+        for f in input.forecasts where f.status == "open" && !(f.objectID.map(gone.contains) ?? false) {
             if let due = f.dueAt, due.timeIntervalSince(now) > attentionHorizon { continue }
             let title: String
             switch f.kind {
@@ -176,7 +178,7 @@ public enum ReportBuilder {
             out.append(.init(title: title, detail: f.note ?? (f.kind.isKnownForecast ? f.line : nil), due: f.dueAt,
                              needsClient: ["domain_expiry", "payment", "db_growth"].contains(f.kind)))
         }
-        for s in input.sites {
+        for s in input.sites where s.current {
             if let d = s.domainExpiry, daysLeft(d, now) <= expiryHorizonDays, !covered.contains("domain_expiry|\(s.name)") {
                 out.append(.init(title: "Продлить домен \(s.name)", detail: nil, due: d, needsClient: true))
             }

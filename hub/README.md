@@ -12,9 +12,12 @@ PostgreSQL 18. Mac можно закрыть — проверки не оста�
 | `db`      | PostgreSQL 18, данные в томе `pgdata` |
 | `hub`     | опрос агентов и сайтов, инциденты, сводки по часам, разделы таблиц |
 | `backup`  | каждую ночь `pg_dump` в `/opt/monitor-hub/backups`, хранит 14 дней |
+| `pdf`     | печать месячных отчётов в PDF (Gotenberg), без интернета |
+| `web`     | только если указан домен: HTTPS для ссылок на отчёты (Caddy) |
 
-Наружу хаб ничего не открывает: никаких портов, только исходящие
-соединения к агентам (9443) и сайтам.
+Наружу хаб открывает одно: ссылки на отчёты клиентам `https://ДОМЕН/r/…`,
+и только если при установке указан домен. Остальное — исходящие соединения
+к агентам (9443) и сайтам.
 
 ## Что хаб хранит, а что нет
 
@@ -87,6 +90,37 @@ cd /opt/monitor-hub/src && bash hub/deploy/install.sh
 Скрипт подтянет свежую версию, пересоберёт хаб и перезапустит его. Ключ и
 пароль базы не меняются, данные остаются.
 
+## Месячные отчёты клиентам
+
+Раз в час хаб считает итоги по дням и, когда у клиента наступает день отчёта
+(по умолчанию 1-е число, 06:00 по времени клиента), готовит **черновик** за
+прошлый месяц. Клиенту сам ничего не отправляет: сначала отчёт смотрите вы.
+Если ваш Telegram привязан к хабу, придёт строка «Отчёты за сентябрь готовы».
+
+1. Один раз — подпись и строка внизу отчёта:
+   ```
+   cd /opt/monitor-hub/src/hub/deploy
+   docker compose exec hub monitor-hub report signature "Михаил Дмитраков" "Связь: Telegram @…"
+   ```
+2. Посмотреть черновики: `docker compose exec hub monitor-hub report drafts`
+3. Открыть черновик на Mac:
+   ```
+   ssh root@АДРЕС_СЕРВЕРА 'cd /opt/monitor-hub/src/hub/deploy && docker compose exec -T hub monitor-hub report preview ID' > ~/Downloads/отчёт.html
+   open ~/Downloads/отчёт.html
+   ```
+4. Если нужно — комментарий в начале: `… monitor-hub report comment ID "Спокойный месяц"`
+5. Утвердить: `… monitor-hub report send ID` — хаб покажет ссылку
+   `https://ДОМЕН/r/…` (один раз, в базе хранится только её хэш). Ссылку
+   отправляете клиенту сами; на странице есть «Скачать PDF».
+6. Закрыть ссылку: `… monitor-hub report revoke ССЫЛКА`.
+
+Ссылка на черновик не открывается никогда. Неизвестная, просроченная и
+закрытая ссылки выглядят одинаково: «Ссылка не действует».
+
+Домен для ссылок: направьте A-запись (например `reports.ваш-домен.ru`) на
+адрес VPS, откройте порты 80 и 443 и запустите `install.sh` ещё раз — он
+спросит домен, если вы пропустили его в первый раз (`/opt/monitor-hub/report-domain`).
+
 ## Бэкапы
 
 - Лежат в `/opt/monitor-hub/backups/monitor-ГГГГ-ММ-ДД.dump`.
@@ -111,4 +145,10 @@ cd /opt/monitor-hub/src && bash hub/deploy/install.sh
   PGDATABASE=monitor HUB_MIGRATIONS=../db/migrations swift test` (база
   **очищается**). С живым агентом дополнительно `HUB_TEST_AGENT=host:9443`,
   `HUB_TEST_AGENT_TOKEN`, `HUB_TEST_AGENT_FP`.
-- Команды: `monitor-hub run | migrate | import FILE [ИМЯ] | new-key | version`.
+- С печатью PDF: `HUB_TEST_PDF=http://127.0.0.1:3000` и запущенный
+  `docker run -p 3000:3000 gotenberg/gotenberg:8`.
+- Команды: `monitor-hub run | migrate | import FILE [ИМЯ] | new-key | report … | version`.
+- Отчёты: сборка и страница — общие с приложением (`app/Sources/MonitorReports`),
+  здесь — база (`PostgresReportStore`), дневные итоги (`DailyRollup`),
+  страница по ссылке (`ReportServer`, переменная `HUB_HTTP`) и PDF (`ReportPDF`,
+  `HUB_PDF_URL`, файлы в `HUB_FILES`).

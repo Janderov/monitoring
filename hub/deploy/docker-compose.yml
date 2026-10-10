@@ -1,6 +1,11 @@
-# The hub and its database on one small VPS. Nothing here listens on the
-# internet: the hub only connects out (to the agents and to healthchecks.io),
-# and PostgreSQL is reachable only by the hub inside this compose network.
+# The hub and its database on one small VPS. PostgreSQL is reachable only by
+# the hub inside this compose network. The hub connects out (to the agents and
+# to healthchecks.io) and answers one thing: clients' report links /r/<token>,
+# on 127.0.0.1:8080 of the VPS. To give clients those links over HTTPS, point
+# a domain at the VPS and start with the `web` profile (install.sh does it when
+# you give it a domain): Caddy gets the certificate and passes /r/… to the hub.
+#   HUB_DOMAIN=reports.example.com HUB_PUBLIC_URL=https://reports.example.com \
+#   COMPOSE_PROFILES=web docker compose up -d
 #
 # Secrets are files in ./secrets (install.sh makes them, mode 600):
 #   secret-key     encryption key for agent tokens in the database
@@ -40,10 +45,38 @@ services:
       PGUSER: monitor
       PGDATABASE: monitor
       HUB_NAME: ${HUB_NAME:-Хаб}
+      HUB_HTTP: 0.0.0.0:8080
+      HUB_PUBLIC_URL: ${HUB_PUBLIC_URL:-}
+      HUB_PDF_URL: http://pdf:3000
       TZ: Europe/Moscow
     secrets: [secret-key, db-password, heartbeat-url]
+    ports:
+      - 127.0.0.1:8080:8080
+    networks: [default, pdf]
     volumes:
       - ./import:/import:ro
+      - files:/var/lib/monitor-hub/files
+
+  # Prints report pages to PDF (Chromium). No internet, no scripts, only the hub reaches it.
+  pdf:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    command: ["gotenberg", "--chromium-disable-javascript=true", "--libreoffice-disable-routes=true",
+              "--webhook-disable=true", "--api-timeout=60s"]
+    networks: [pdf]
+
+  # HTTPS for the report links (profile `web`): a certificate from Let's Encrypt for HUB_DOMAIN.
+  web:
+    image: caddy:2
+    restart: unless-stopped
+    profiles: [web]
+    depends_on: [hub]
+    command: ["caddy", "reverse-proxy", "--from", "${HUB_DOMAIN:-}", "--to", "hub:8080"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy:/data
 
   # A copy of the database every night, 14 days kept, in ./backups.
   backup:
@@ -79,5 +112,11 @@ secrets:
   heartbeat-url:
     file: ./secrets/heartbeat-url
 
+networks:
+  pdf:
+    internal: true
+
 volumes:
   pgdata:
+  files:
+  caddy:

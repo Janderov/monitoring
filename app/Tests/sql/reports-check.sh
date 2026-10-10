@@ -28,9 +28,9 @@ done < <(python3 "$here/extract_report_sql.py" "$here/../../Sources/MonitorRepor
 fail=0
 check() { if [[ "$2" != "$3" ]]; then echo "FAIL $1: got [$2] want [$3]"; fail=1; else echo "ok   $1"; fi; }
 check client         "$(head -1 <<<"${got[client]}" | cut -d"|" -f1,2,3,4,5,9,10)" "ООО «Пример»|Europe/Moscow|t|1|review|99.900|Михаил Дмитраков"
-check sites          "${got[sites]}" $'00000000-0000-0000-0000-0000000000d2|moved.example.com|https://moved.example.com||2026-11-16 09:00:00+00\n00000000-0000-0000-0000-0000000000d1|shop.example.com|https://shop.example.com/catalog|2026-12-19 09:00:00+00|2026-11-16 09:00:00+00'
+check sites          "${got[sites]}" $'00000000-0000-0000-0000-0000000000d2|moved.example.com|https://moved.example.com||2026-11-16 09:00:00+00|f\n00000000-0000-0000-0000-0000000000d1|shop.example.com|https://shop.example.com/catalog|2026-12-19 09:00:00+00|2026-11-16 09:00:00+00|t'
 check siteDays       "$(wc -l <<<"${got[siteDays]}")" "30"
-check servers        "${got[servers]}" "00000000-0000-0000-0000-0000000000b1|app.example.com|"
+check servers        "${got[servers]}" "00000000-0000-0000-0000-0000000000b1|app.example.com||t"
 check serverDays     "$(wc -l <<<"${got[serverDays]}")" "30"
 check diskDays       "$(wc -l <<<"${got[diskDays]}")" "60"
 check incidents      "$(cut -d'|' -f1,4 <<<"${got[incidents]}")" "shop.example.com|Не открывался"

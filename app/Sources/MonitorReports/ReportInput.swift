@@ -36,8 +36,13 @@ public struct ReportInput: Sendable {
         public var note: String?
         public var tlsExpiry: Date?
         public var domainExpiry: Date?
-        public init(id: UUID, name: String, note: String? = nil, tlsExpiry: Date? = nil, domainExpiry: Date? = nil) {
+        /// Still the client's at the end of the period; a site that moved to
+        /// someone else shows its days but gets no «Скоро потребует внимания».
+        public var current: Bool
+        public init(id: UUID, name: String, note: String? = nil, tlsExpiry: Date? = nil, domainExpiry: Date? = nil,
+                    current: Bool = true) {
             self.id = id; self.name = name; self.note = note; self.tlsExpiry = tlsExpiry; self.domainExpiry = domainExpiry
+            self.current = current
         }
     }
 
@@ -59,7 +64,10 @@ public struct ReportInput: Sendable {
         public var id: UUID
         public var name: String
         public var note: String?
-        public init(id: UUID, name: String, note: String? = nil) { self.id = id; self.name = name; self.note = note }
+        public var current: Bool
+        public init(id: UUID, name: String, note: String? = nil, current: Bool = true) {
+            self.id = id; self.name = name; self.note = note; self.current = current
+        }
     }
 
     /// `mon.server_daily`.
