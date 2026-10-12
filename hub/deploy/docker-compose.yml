@@ -51,6 +51,8 @@ services:
       HUB_PUBLIC_URL: ${HUB_DOMAIN:+https://${HUB_DOMAIN}}
       HUB_TRUST_PROXY: "1"
       HUB_PDF_URL: http://pdf:3000
+      # Empty = api.telegram.org directly; set a relay when it is blocked.
+      HUB_TELEGRAM_API: ${HUB_TELEGRAM_API:-}
       TZ: Europe/Moscow
     secrets: [secret-key, db-password, heartbeat-url, telegram-bot-token]
     ports:
