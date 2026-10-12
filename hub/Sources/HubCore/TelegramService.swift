@@ -15,6 +15,14 @@ public struct TelegramService: HubService {
     let box: SecretBox?
     /// How often the token is looked up again.
     public static let recheck: TimeInterval = 60
+    /// Where the Bot API is. A server that cannot reach api.telegram.org
+    /// (some Russian hosting) goes through a relay on another server:
+    /// HUB_TELEGRAM_API=https://tg.example.com in hub.env.
+    public static let apiBase: String = {
+        var v = (ProcessInfo.processInfo.environment["HUB_TELEGRAM_API"] ?? "").trimmingCharacters(in: .whitespaces)
+        while v.hasSuffix("/") { v.removeLast() }
+        return v.isEmpty ? "https://api.telegram.org" : v
+    }()
 
     public init(config: HubConfig) {
         fileToken = config.telegramToken
@@ -51,12 +59,12 @@ public struct TelegramService: HubService {
 
     static func bot(_ token: String, db: Database, logger: Logger) async {
         let store = PostgresTelegramStore(db: db)
-        let api = TelegramBotAPI(transport: URLSessionTelegram(token: token))
+        let api = TelegramBotAPI(transport: URLSessionTelegram(token: token, base: TelegramService.apiBase))
         let bot = TelegramBot(api: api, store: store)
         do {
             let name = try await api.me()
             try await store.setUsername(name)
-            logger.info("telegram: бот @\(name)")
+            logger.info("telegram: бот @\(name)\(apiBase == "https://api.telegram.org" ? "" : " через \(apiBase)")")
         } catch {
             logger.error("telegram: \(HubError.describe(error))")
         }
@@ -138,7 +146,7 @@ public enum TelegramSettings {
         guard token.range(of: #"^[0-9]{5,}:[A-Za-z0-9_-]{30,}$"#, options: .regularExpression) != nil else {
             throw Failure(description: "это не похоже на токен от @BotFather (вид 123456789:AA…)")
         }
-        let api = TelegramBotAPI(transport: transport ?? URLSessionTelegram(token: token))
+        let api = TelegramBotAPI(transport: transport ?? URLSessionTelegram(token: token, base: TelegramService.apiBase))
         let username: String
         do { username = try await api.me() } catch TelegramError.badToken {
             throw Failure(description: "Telegram не принял этот токен")
